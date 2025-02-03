@@ -94,7 +94,7 @@ def create_hello_world():
         bytes()
     )
 
-def create_module(file: str, code: bytes, source_name: str):
+def create_module(file: str, code: CodeType, source_name: str):
     main_code = create_code_string(
         [("RESUME", 0),
         ("LOAD_CONST", 0),

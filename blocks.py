@@ -2,7 +2,8 @@ from dataclasses import dataclass
 from collections import namedtuple
 from collections.abc import Callable
 
-Instruction = namedtuple("Instruction", ["opcode", "argbyte"])
+# arg: int | Variable
+Instruction = namedtuple("Instruction", ["opcode", "arg"])
 
 @dataclass
 class Block:
@@ -22,13 +23,71 @@ class Block:
     @staticmethod
     def from_instr(instr: InstrInfo, arg: int) -> Block:
         return Block(
-            Instruction(instr.opcode, arg),
+            [Instruction(instr.opcode, arg)],
             instr.get_height(arg),
             instr.get_depth(arg),
         )
 
+    @staticmethod
+    def construct_jump(jump_header: Block, success: Block, failure: Block, jump_past: bool = False) -> Block:
+        if jump_past:
+            failure = failure.then(Block.from_instr(instructions_info_d["JUMP_FORWARD"], 1+2*len(failure.instructions)))
+
+        return Block(
+            update_last_arg(jump_header.instructions, 1+2*len(failure.instructions))
+                + failure.instructions + success.instructions,
+            jump_header.height + min(failure.height, success.height),
+            min(jump_header.depth,
+                jump_header.height + failure.depth,
+                jump_header.height + success.depth)
+        )
+
+    @staticmethod
+    def early_ret() -> Block:
+        '''A function that returns the value in co_consts[0]'''
+        return Block.from_instr(instruction_info_d["LOAD_CONST"], 0).\
+            then(Block.from_instr(instruction_info_d["RETURN_VALUE"], 0))
+    
     def __add__(self, other: Block) -> Block:
         return self.then(other)
+
+def jump_if_true(true: Block, false: Block, jump_past: bool = False) -> Block:
+    return Block.construct_jump(
+        Block.from_instr(instruction_info_d["POP_JUMP_IF_TRUE"], 0),
+        true, false, jump_past
+    )
+
+def jump_if_false(false: Block, true: Block, jump_past: bool = False) -> Block:
+    return Block.construct_jump(
+        Block.from_instr(instruction_info_d["POP_JUMP_IF_FALSE"], 0),
+        false, true, jump_past
+    )
+
+def jump_if_none(none: Block, not_none: Block, jump_past: bool = False) -> Block:
+    return Block.construct_jump(
+        Block.from_instr(instruction_info_d["POP_JUMP_IF_NONE"], 0),
+        none, not_none, jump_past
+    )
+
+def jump_if_not_none(not_none: Block, none: Block, jump_past: bool = False) -> Block:
+    return Block.construct_jump(
+        Block.from_instr(instruction_info_d["POP_JUMP_IF_NOT_NONE"], 0),
+        not_none, none, jump_past
+    )
+
+def update_last_arg(instr_l: [Instruction], delta: int):
+    return instr_l[:-1] + with_arg_as_list(instr_l[-1], delta)
+
+def with_arg_as_list(instr: Instruction, arg: int):
+    if arg <= 255:
+        return [Instruction(instr.opcode, arg)]
+    
+    assert arg <= 0xffffffff, f"Expected an arg less than 4 bytes long, was {len(arg.to_bytes())} bytes long"
+    
+    l = [Instruction(instructioninfo["EXTENDED_ARG"].opcode, byte) for byte in arg.to_bytes(4)[:-1] if byte != 0]
+    l.append(Instruction(instr.opcode, arg & 0xff))
+    return l
+        
 
 
 @dataclass
@@ -50,7 +109,7 @@ class InstrInfo:
 
         return self.depth(arg)
 
-instruction_info = [InstrInfo(name, index, height, depth) for index, (name, height, depth) in enumerate([
+instruction_info_d = {name: InstrInfo(name, index, height, depth) for index, (name, height, depth) in enumerate([
     ("CACHE", 0, 0),
     ("BINARY_SLICE", -2, -3),
     ("BINARY_SUBSCR", -1, -2),
@@ -172,4 +231,6 @@ instruction_info = [InstrInfo(name, index, height, depth) for index, (name, heig
     # There's some more after this point but I don't know what they do (undocumented) or they have
     # an opcode greater than one byte which I thought is unencodable so not sure why they're there.
     # All the ones that are in the docs or I can infer can be implemented with others so I think that's ok for now
-)]
+)}
+
+instruction_info_l = list(instruction_info_d.values())
