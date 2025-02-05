@@ -1,9 +1,24 @@
 from dataclasses import dataclass
 from collections import namedtuple
 from collections.abc import Callable
+from typing import Any, Self
+import dis
 
-# arg: int | Variable
-Instruction = namedtuple("Instruction", ["opcode", "arg"])
+@dataclass
+class Variable:
+    name: str
+    local: bool
+    func: bool
+
+@dataclass
+class Constant:
+    value: Any
+    
+# arg: int | Variable | Constant
+@dataclass
+class Instruction:
+    opcode: int
+    arg: int | Variable | Constant
 
 @dataclass
 class Block:
@@ -13,7 +28,7 @@ class Block:
     height: int
     depth: int
 
-    def then(self, other: Block) -> Block:
+    def then(self, other: Self) -> Self:
         return Block(
             self.instructions + other.instructions,
             self.height + other.height,
@@ -21,20 +36,29 @@ class Block:
         )
 
     @staticmethod
-    def from_instr(instr: InstrInfo, arg: int) -> Block:
-        return Block(
-            [Instruction(instr.opcode, arg)],
-            instr.get_height(arg),
-            instr.get_depth(arg),
-        )
+    def from_instr(instr: "InstrInfo", arg: int | Variable | Constant) -> Self:
+        if isinstance(arg, int):
+            return Block(
+                [Instruction(instr.opcode, arg)] + [Instruction(0,0)] * get_cache_number(instr.opcode),
+                instr.get_height(arg),
+                instr.get_depth(arg),
+            )
+        else:
+            # We know that we can only get here in situations where the instruction has a constant height / depth
+            # or it's a load that supports function call pushes
+            return Block(
+                [Instruction(instr.opcode, arg)] + [Instruction(0,0)] * get_cache_number(instr.opcode),
+                instr.height if isinstance(instr.height, int) else 1+arg.func,
+                instr.depth
+            )
 
     @staticmethod
-    def construct_jump(jump_header: Block, success: Block, failure: Block, jump_past: bool = False) -> Block:
+    def construct_jump(jump_header: Self, success: Self, failure: Self, jump_past: bool = False) -> Self:
         if jump_past:
-            failure = failure.then(Block.from_instr(instructions_info_d["JUMP_FORWARD"], 1+2*len(failure.instructions)))
-
+            failure = failure.then(Block.from_instr(instruction_info_d["JUMP_FORWARD"], len(success.instructions)))
+       
         return Block(
-            update_last_arg(jump_header.instructions, 1+2*len(failure.instructions))
+            update_last_arg(jump_header.instructions, len(failure.instructions))
                 + failure.instructions + success.instructions,
             jump_header.height + min(failure.height, success.height),
             min(jump_header.depth,
@@ -43,13 +67,27 @@ class Block:
         )
 
     @staticmethod
-    def early_ret() -> Block:
+    def early_ret() -> Self:
         '''A function that returns the value in co_consts[0]'''
         return Block.from_instr(instruction_info_d["LOAD_CONST"], 0).\
             then(Block.from_instr(instruction_info_d["RETURN_VALUE"], 0))
     
-    def __add__(self, other: Block) -> Block:
+    def __add__(self, other: Self) -> Self:
         return self.then(other)
+
+cache_numbers = {op : sum(cache_vals.values()) for op, cache_vals in dis._cache_format.items()}
+
+def get_cache_number(op: str | int) -> int:
+    if isinstance(op, str):
+        return cache_numbers.get(op, 0)
+    
+    if isinstance(op, int):
+        return get_cache_number(dis.opname[op])
+    
+    raise TypeError(f"Expected argument of type 'str' or 'int' got {type(op)}")
+
+def noop_block() -> Block:
+    return Block([], 0, 0)
 
 def jump_if_true(true: Block, false: Block, jump_past: bool = False) -> Block:
     return Block.construct_jump(
@@ -76,7 +114,12 @@ def jump_if_not_none(not_none: Block, none: Block, jump_past: bool = False) -> B
     )
 
 def update_last_arg(instr_l: [Instruction], delta: int):
-    return instr_l[:-1] + with_arg_as_list(instr_l[-1], delta)
+    for index, instr in enumerate(reversed(instr_l)):
+        if instr.opcode != 0:
+            break
+
+    return instr_l[:-(1+index)] + with_arg_as_list(instr, delta) \
+        + [Instruction(0,0)] * get_cache_number(instr.opcode)
 
 def with_arg_as_list(instr: Instruction, arg: int):
     if arg <= 255:
@@ -84,9 +127,9 @@ def with_arg_as_list(instr: Instruction, arg: int):
     
     assert arg <= 0xffffffff, f"Expected an arg less than 4 bytes long, was {len(arg.to_bytes())} bytes long"
     
-    l = [Instruction(instructioninfo["EXTENDED_ARG"].opcode, byte) for byte in arg.to_bytes(4)[:-1] if byte != 0]
-    l.append(Instruction(instr.opcode, arg & 0xff))
-    return l
+    instrs = [Instruction(instruction_info_d["EXTENDED_ARG"].opcode, byte) for byte in arg.to_bytes(4)[:-1] if byte != 0]
+    instrs.append(Instruction(instr.opcode, arg & 0xff))
+    return instrs
         
 
 
@@ -94,8 +137,8 @@ def with_arg_as_list(instr: Instruction, arg: int):
 class InstrInfo:
     name: str
     opcode: int
-    height : int | Callable[[Int], int]
-    depth: int | Callable[[Int], int]
+    height : int | Callable[[int], int]
+    depth: int | Callable[[int], int]
 
     def get_height(self, arg):
         if isinstance(self.height, int):
