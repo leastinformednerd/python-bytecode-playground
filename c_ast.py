@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from typing import Any, Self, Literal
+import blocks
 
 class Operation:
     pass
@@ -8,6 +9,20 @@ class Operation:
 class ASTNode:
     op: Operation
     children: [Self] = field(default_factory = list)
+
+    def prepended(self, other: Self) -> Self:
+        if isinstance(self.op, Sequence):
+            if isinstance(other.op, Sequence):
+                return ASTNode(Sequence(), self.children + other.children)
+            return ASTNode(Sequence(), [self] + other.children)
+        
+        return ASTNode(op = Sequence(), children = [other, self])
+
+    def appended(self, other: Self) -> Self:
+        return other.prepended(self)
+
+    def then(self, other):
+        return self.appended(other)
 
 @dataclass
 class Constant(Operation):
@@ -48,10 +63,10 @@ comp_op_argcodes = {symbol : value << 5 for value, symbol in enumerate(('<', '<=
 class CompOp(Operation):
     '''Type to wrap the COMPARE_OP instruction. Is missing some undocumented paramater in the fourth-lowest bit'''
     op: Literal['<', '<=', '==', '!=', '>', '>=']
-    force_convert = bool | None
+    force_convert: bool | None = field(default_factory = lambda: None)
 
     def arg(self) -> int:
-        return (comp_op_argcodes[self.op] + 16 * (self.force_convert if self.force_convert is not None else 0)) | 8
+        return (comp_op_argcodes[self.op] + 16 * (self.force_convert if self.force_convert is not None else 0)) | 8 | 2
 
 @dataclass
 class IsOp(Operation):
@@ -88,14 +103,19 @@ class StoreName(Operation):
     name: str
     local: bool
 
+@dataclass
 class Call(Operation):
     '''Type to represent a function / method call'''
-    pass
+    pop: bool = field(default_factory = lambda: False)
 
 @dataclass
-class Define(Operation):
+class MakeFn(Operation):
+    args: [str]
     name: str
-    arg_names: [str]
 
 class Return(Operation):
     pass
+
+@dataclass
+class DebugArbitaryBlock(Operation):
+    block: blocks.Block

@@ -1,7 +1,7 @@
-from dataclasses import dataclass
-from collections import namedtuple
+from dataclasses import dataclass, field
 from collections.abc import Callable
 from typing import Any, Self
+import opcode
 import dis
 
 @dataclass
@@ -27,12 +27,17 @@ class Block:
     instructions: list[Instruction]
     height: int
     depth: int
+    max_height: int
+    args: [str] = field(default_factory = list)
 
     def then(self, other: Self) -> Self:
+        assert len(self.args) == 0, "tried to concatenate a function block"
+        assert len(other.args) == 0, "tried to concatenate a function block"
         return Block(
             self.instructions + other.instructions,
             self.height + other.height,
-            min(self.depth, self.height + other.depth)
+            min(self.depth, self.height + other.depth),
+            max(self.height + other.max_height, self.max_height, other.max_height),
         )
 
     @staticmethod
@@ -42,6 +47,7 @@ class Block:
                 [Instruction(instr.opcode, arg)] + [Instruction(0,0)] * get_cache_number(instr.opcode),
                 instr.get_height(arg),
                 instr.get_depth(arg),
+                instr.get_height(arg)
             )
         else:
             # We know that we can only get here in situations where the instruction has a constant height / depth
@@ -49,29 +55,41 @@ class Block:
             return Block(
                 [Instruction(instr.opcode, arg)] + [Instruction(0,0)] * get_cache_number(instr.opcode),
                 instr.height if isinstance(instr.height, int) else 1+arg.func,
-                instr.depth
+                instr.depth,
+                instr.height if isinstance(instr.height, int) else 1 +arg.func
             )
 
     @staticmethod
     def construct_jump(jump_header: Self, success: Self, failure: Self, jump_past: bool = False) -> Self:
         if jump_past:
             failure = failure.then(Block.from_instr(instruction_info_d["JUMP_FORWARD"], len(success.instructions)))
-       
+
+        assert failure.height == success.height, f"It's invalid to form an if with different return sizes, {success.height=} {failure.height=}"
+
         return Block(
             update_last_arg(jump_header.instructions, len(failure.instructions))
                 + failure.instructions + success.instructions,
-            jump_header.height + min(failure.height, success.height),
+            jump_header.height + success.height,
             min(jump_header.depth,
                 jump_header.height + failure.depth,
-                jump_header.height + success.depth)
+                jump_header.height + success.depth),
+            jump_header.height + success.height,
         )
 
     @staticmethod
     def early_ret() -> Self:
-        '''A function that returns the value in co_consts[0]'''
-        return Block.from_instr(instruction_info_d["LOAD_CONST"], 0).\
+        '''A function that creates a block equivalent to `return None`'''
+        return Block.from_instr(instruction_info_d["LOAD_CONST"], Constant(None)).\
             then(Block.from_instr(instruction_info_d["RETURN_VALUE"], 0))
-    
+
+    def pop_extraneous(self: Self) -> Self:
+        return Block(
+            self.instructions + [Instruction(instruction_info_d["POP_TOP"].opcode, 0)] * self.height,
+            0,
+            self.depth + min(self.height, 0),
+            self.max_height
+        )
+
     def __add__(self, other: Self) -> Self:
         return self.then(other)
 
@@ -87,7 +105,7 @@ def get_cache_number(op: str | int) -> int:
     raise TypeError(f"Expected argument of type 'str' or 'int' got {type(op)}")
 
 def noop_block() -> Block:
-    return Block([], 0, 0)
+    return Block([], 0, 0, 0)
 
 def jump_if_true(true: Block, false: Block, jump_past: bool = False) -> Block:
     return Block.construct_jump(
@@ -152,7 +170,7 @@ class InstrInfo:
 
         return self.depth(arg)
 
-instruction_info_d = {name: InstrInfo(name, index, height, depth) for index, (name, height, depth) in enumerate([
+instruction_info_d = {name: InstrInfo(name, index, opcode.stack_effect(index) if isinstance(_height, int) and abs(_height) < 10 else _height, depth) for index, (name, _height, depth) in enumerate([
     ("CACHE", 0, 0),
     ("BINARY_SLICE", -2, -3),
     ("BINARY_SUBSCR", -1, -2),

@@ -42,6 +42,9 @@ def compile(node: ASTNode) -> Block:
     assert isinstance(node, ASTNode), f"tried to compile non-ast value node with type {type(node)}"
 
     match node:
+        case ASTNode(op = c_ast.Constant(value = int() as value)) if value <= 255:
+            return Block.from_instr(instruction_info_d["LOAD_SMALL_INT"], value)
+
         case ASTNode(op = c_ast.Constant(value = value)):
             return Block.from_instr(instruction_info_d["LOAD_CONST"], Constant(value))
         
@@ -105,29 +108,30 @@ def compile(node: ASTNode) -> Block:
             var = Variable(name, local, func)
             return Block.from_instr(
                 instruction_info_d[
-                    "LOAD_LOCAL" if local else "LOAD_GLOBAL"
+                    "LOAD_FAST" if local else "LOAD_GLOBAL"
                 ], var
             )
 
-        case ASTNode(op = c_ast.StoreName(name = name, local = local)):
-            var = Variable(name, local)
-            return Block.from_instr(
+        case ASTNode(op = c_ast.StoreName(name = name, local = local), children = [val]):
+            var = Variable(name, local, False)
+            return compile(val) + Block.from_instr(
                 instruction_info_d[
-                    "STORE_LOCAL" if local else "STORE_GLOBAL"
+                    "STORE_FAST" if local else "STORE_GLOBAL"
                 ], var
             )
 
-        case ASTNode(op = c_ast.Call(), children = children):
-            func = compile(children[0])
+        case ASTNode(op = c_ast.Call(pop = pop), children = [func, *args]):
+            func = compile(func)
             assert func.height == 2, f"function expressions must have height 2, found {func.height}"
 
             b = blocks.noop_block()
-            for arg_expr in children[1:]:
+            for arg_expr in args:
                 arg_expr = compile(arg_expr)
                 assert arg_expr.height > 0, f"function arguments must have height > 0, found {arg_expr.height}"
                 b = b.then(arg_expr)
             
-            return func.then(b).then(Block.from_instr(instruction_info_d["CALL"], len(children)-1))
+            return func.then(b).then(Block.from_instr(instruction_info_d["CALL"], len(args)))\
+                .then(Block.from_instr(instruction_info_d["POP_TOP"], 0) if pop else blocks.noop_block())
 
         case ASTNode(op = c_ast.Return(), children = []):
             return compile(ASTNode(op = c_ast.Constant(value = None))).then(
@@ -138,6 +142,22 @@ def compile(node: ASTNode) -> Block:
             return compile(val).then(
                 Block.from_instr(instruction_info_d["RETURN_VALUE"], 0)
             )
+
+        case ASTNode(op = c_ast.MakeFn(args = args, name = name), children = [body]):
+            f = Block.from_instr(instruction_info_d["RESUME"], 0) + compile(body)
+            # f = compile(body)
+
+            assert f.height == 1 and f.depth >= 0, f"Functions must have height and depth >= got {f.height=} {f.depth=}"
+            
+            f.args = args
+            f = resolve_names(f, "main.py", name)
+
+            return Block.from_instr(instruction_info_d["LOAD_CONST"], Constant(f)).then(
+                Block.from_instr(instruction_info_d["MAKE_FUNCTION"], 0)
+            )
+
+        case ASTNode(op = c_ast.DebugArbitaryBlock(block = block)):
+            return block
         
         case _:
             raise ValueError(f"Node {node} is malformed")
@@ -145,13 +165,16 @@ def compile(node: ASTNode) -> Block:
 def block_to_code_string(block: Block):
     return create_code_string((instr.opcode, instr.arg) for instr in block.instructions)
 
-def resolve_names(body: Block, filename: str, name: str) -> CodeType:
+def resolve_names(body: Block, filename: str = "main.py", name: str = "main") -> CodeType:
     '''Resolve names from the block and compile it into a code object. Currently doesn't support function defs'''
+    body.args = body.args
+    n_args = len(body.args)
+    
     consts = []
-    locals = []
+    locals = body.args
     globals = []
     consts_d = {}
-    locals_d = {}
+    locals_d = {name: index for index, name in enumerate(locals)}
     globals_d = {}
     for instr in body.instructions:
         if isinstance(instr.arg, Variable):
@@ -178,8 +201,9 @@ def resolve_names(body: Block, filename: str, name: str) -> CodeType:
             instr.arg = consts_d[instr.arg.value]
 
     return create_code_object(
-        0,0,0,len(locals),
-        body.height, # this isn't correct but I'm lazy
+        n_args,
+        0,0,len(locals),
+        2*body.max_height, # This should I think be body.max_height but I'm not calculating that properly rn, so
         2,
         block_to_code_string(body),
         tuple(consts),
@@ -194,31 +218,67 @@ def resolve_names(body: Block, filename: str, name: str) -> CodeType:
     )
 
 if __name__ == "__main__":
-    condition = ASTNode(op = c_ast.CompOp("=="), children = [
-        ASTNode(
-            op = c_ast.Call(), children = [
-                ASTNode(op = c_ast.LoadName("int", False, True)),
+    # dbg_print = lambda x : ASTNode(op = c_ast.Call(), children = [
+    #     ASTNode(op = c_ast.LoadName("print", False, True)),
+    #     x
+    # ]).then(ASTNode(c_ast.DebugArbitaryBlock(Block.from_instr(instruction_info_d["POP_TOP"], 0))))
+
+    def dbg_print(*values):
+        return ASTNode(op = c_ast.Call(pop = True), children = [
+            ASTNode(op = c_ast.LoadName("print", False, True)),
+        ] + list(values))
+    
+    f_body =ASTNode(op = c_ast.IfElse(), children = [
+        ASTNode(op = c_ast.CompOp("<=", True), children = [
+            ASTNode(op = c_ast.LoadName("x", True, False)),
+            ASTNode(op = c_ast.Constant(0)),
+            # ASTNode(op = c_ast.Constant(0))
+        ]),#.prepended(dbg_print(ASTNode(op = c_ast.Constant("start of f. x=")), ASTNode(op = c_ast.LoadName("x", True, False)))),
+        ASTNode(op = c_ast.Return(), children = [
+            ASTNode(op = c_ast.Constant(1))
+        ]),
+        ASTNode(op = c_ast.Return(), children = [ASTNode(op = c_ast.BinaryOp("*"), children = [
+                ASTNode(op = c_ast.LoadName("x", True, False)),
                 ASTNode(op = c_ast.Call(), children = [
-                    ASTNode(op = c_ast.LoadName("input", False, True))
-                ])
-            ]
-        ),
-        ASTNode(op = c_ast.Constant(0))
+                    ASTNode(op = c_ast.LoadName("f", False, True)),
+                    ASTNode(op = c_ast.BinaryOp("-"), children = [
+                        ASTNode(op = c_ast.LoadName("x", True, False)),
+                        ASTNode(op = c_ast.Constant(1))
+                    ])
+                    # ASTNode(op = c_ast.DebugArbitaryBlock(Block.from_instr(instruction_info_d["LOAD_SMALL_INT"], 5)))                ]),
+            ])])
+        ])])
+
+    print(compile(f_body).max_height)
+    
+    define_f = ASTNode(op = c_ast.StoreName("f", False), children = [
+        ASTNode(op = c_ast.MakeFn(args = ["x"], name = "f"), children = [f_body])
     ])
 
-    true_branch = ASTNode(op = c_ast.Return(), children = [ASTNode(op = c_ast.Call(), children = [
-        ASTNode(op = c_ast.LoadName("print", False, True)),
-        ASTNode(op = c_ast.Constant("input == 0"))
-    ])])
-    
-    false_branch = ASTNode(op = c_ast.Return(), children = [ASTNode(op = c_ast.Call(), children = [
-        ASTNode(op = c_ast.LoadName("print", False, True)),
-        ASTNode(op = c_ast.Constant("input != 0"))
-    ])])
-    
-    sample = ASTNode(op = c_ast.IfElse(), children = [condition, true_branch, false_branch])
+    call_f = ASTNode(op = c_ast.Call(), children = [
+        ASTNode(op = c_ast.LoadName("f", False, True)),
+        ASTNode(op = c_ast.Call(), children = [
+            ASTNode(op = c_ast.LoadName("int", False, True)),
+            ASTNode(op = c_ast.Call(), children = [
+                ASTNode(op = c_ast.LoadName("input", False, True))
+            ])
+        ])
+        # ASTNode(op = c_ast.Constant(5))
+    ])
 
-    compiled = compile(sample)
+    define_f = compile(define_f)
+
+    call_f = compile(dbg_print(call_f)).pop_extraneous()
+
+    print(f"{define_f.max_height=} {call_f.max_height=}")
+
+    compiled = define_f + call_f + Block.early_ret()
+
+    assert compiled.height >= 0 and compiled.depth >= 0, f"{compiled.height=} {compiled.depth=}"
+    
     obj = resolve_names(compiled, "test_ast.py", "cond_test")
 
+    import dis
+    dis.dis(obj)
+  
     create_module("test_ast.pyc", obj, "test_ast.py")

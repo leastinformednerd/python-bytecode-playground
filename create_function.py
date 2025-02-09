@@ -99,6 +99,3 @@ def write_to_file(file, code):
         f.write(
             _code_to_timestamp_pyc(code)
         )
-
-if __name__ == "__main__":
-    create_module("hello_world.pyc", create_hello_world(), "hello_world.py")
