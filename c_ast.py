@@ -112,6 +112,7 @@ class Call(Operation):
 class MakeFn(Operation):
     args: [str]
     name: str
+    closes_over: tuple = field(default_factory = tuple)
 
 class Return(Operation):
     pass

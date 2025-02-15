@@ -143,18 +143,36 @@ def compile(node: ASTNode) -> Block:
                 Block.from_instr(instruction_info_d["RETURN_VALUE"], 0)
             )
 
-        case ASTNode(op = c_ast.MakeFn(args = args, name = name), children = [body]):
+        case ASTNode(op = c_ast.MakeFn(args = args, name = name, closes_over = closes_over), children = [body]):
             f = Block.from_instr(instruction_info_d["RESUME"], 0) + compile(body)
-            # f = compile(body)
+
+            if len(closes_over) != 0:
+                f = Block.from_instr(instruction_info_d["COPY_FREE_VARS"], len(closes_over)) + f
 
             assert f.height == 1 and f.depth >= 0, f"Functions must have height and depth >= got {f.height=} {f.depth=}"
             
             f.args = args
             f = resolve_names(f, "main.py", name)
 
-            return Block.from_instr(instruction_info_d["LOAD_CONST"], Constant(f)).then(
+            make_block = Block.from_instr(instruction_info_d["LOAD_CONST"], Constant(f)).then(
                 Block.from_instr(instruction_info_d["MAKE_FUNCTION"], 0)
             )
+
+            if len(closes_over) != 0:
+                make_block = make_block.then(Block.from_instr(instruction_info_d["SET_FUNCTION_ATTRIBUTE"], 8)) # closure
+
+            for var in closes_over:
+                make_block = Block.from_instr(instruction_info_d["MAKE_CELL"], var)+ make_block
+            make_block.cells = closes_over
+            
+            load_tuple  = blocks.noop_block()
+            for var in closes_over:
+                load_tuple = load_tuple + Block.from_instr(instruction_info_d["LOAD_FAST"], var)
+
+            if len(closes_over) != 0:
+                load_tuple = load_tuple + Block.from_instr(instruction_info_d["BUILD_TUPLE"], len(closes_over))
+
+            return load_tuple + make_block
 
         case ASTNode(op = c_ast.DebugArbitaryBlock(block = block)):
             return block
@@ -167,11 +185,12 @@ def block_to_code_string(block: Block):
 
 def resolve_names(body: Block, filename: str = "main.py", name: str = "main") -> CodeType:
     '''Resolve names from the block and compile it into a code object. Currently doesn't support function defs'''
-    body.args = body.args
+    #body.args = body.args # Why did I do this
     n_args = len(body.args)
+    n_cells = len(body.cells)
     
     consts = []
-    locals = body.args
+    locals = body.args + list(body.cells)
     globals = []
     consts_d = {}
     locals_d = {name: index for index, name in enumerate(locals)}
@@ -182,6 +201,8 @@ def resolve_names(body: Block, filename: str = "main.py", name: str = "main") ->
                 if instr.arg.name not in locals_d:
                     locals_d[instr.arg.name] = len(locals)
                     locals.append(instr.arg.name)
+                if n_args <= len(locals)-1 < n_args + n_cells:
+                    instr.opcode = instruction_info_d["LOAD_DEREF"]
                 if instr.arg.func:
                     instr.arg = (locals_d[instr.arg.name] << 1) + 1
                 else:
@@ -228,29 +249,19 @@ if __name__ == "__main__":
             ASTNode(op = c_ast.LoadName("print", False, True)),
         ] + list(values))
     
-    f_body =ASTNode(op = c_ast.IfElse(), children = [
-        ASTNode(op = c_ast.CompOp("<=", True), children = [
-            ASTNode(op = c_ast.LoadName("x", True, False)),
-            ASTNode(op = c_ast.Constant(0)),
-            # ASTNode(op = c_ast.Constant(0))
-        ]),#.prepended(dbg_print(ASTNode(op = c_ast.Constant("start of f. x=")), ASTNode(op = c_ast.LoadName("x", True, False)))),
-        ASTNode(op = c_ast.Return(), children = [
-            ASTNode(op = c_ast.Constant(1))
-        ]),
-        ASTNode(op = c_ast.Return(), children = [ASTNode(op = c_ast.BinaryOp("*"), children = [
-                ASTNode(op = c_ast.LoadName("x", True, False)),
-                ASTNode(op = c_ast.Call(), children = [
-                    ASTNode(op = c_ast.LoadName("f", False, True)),
-                    ASTNode(op = c_ast.BinaryOp("-"), children = [
-                        ASTNode(op = c_ast.LoadName("x", True, False)),
-                        ASTNode(op = c_ast.Constant(1))
-                    ])
-                    # ASTNode(op = c_ast.DebugArbitaryBlock(Block.from_instr(instruction_info_d["LOAD_SMALL_INT"], 5)))                ]),
-            ])])
-        ])])
+    f_body = ASTNode(op = c_ast.Return(), children = [
+        ASTNode(op = c_ast.MakeFn(args = ["y"], name = "<anonymous>", closes_over = (Variable("x", True, False),)), children = [
+            ASTNode(op = c_ast.Return(), children = [
+                ASTNode(op = c_ast.BinaryOp(op = "+"), children = [
+                    ASTNode(op = c_ast.LoadName("x", True, False)),
+                    ASTNode(op = c_ast.LoadName("y", True, False)),
+                ])
+            ])
+        ])
+    ])
 
-    print(compile(f_body).max_height)
-    
+    print(compile(f_body))
+   
     define_f = ASTNode(op = c_ast.StoreName("f", False), children = [
         ASTNode(op = c_ast.MakeFn(args = ["x"], name = "f"), children = [f_body])
     ])
@@ -272,7 +283,7 @@ if __name__ == "__main__":
 
     print(f"{define_f.max_height=} {call_f.max_height=}")
 
-    compiled = define_f + call_f + Block.early_ret()
+    compiled = define_f + Block.early_ret()
 
     assert compiled.height >= 0 and compiled.depth >= 0, f"{compiled.height=} {compiled.depth=}"
     

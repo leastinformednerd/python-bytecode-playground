@@ -29,6 +29,7 @@ class Block:
     depth: int
     max_height: int
     args: [str] = field(default_factory = list)
+    cells: tuple[Variable, ...] = field(default_factory = tuple)
 
     def then(self, other: Self) -> Self:
         assert len(self.args) == 0, "tried to concatenate a function block"
@@ -229,7 +230,7 @@ instruction_info_d = {name: InstrInfo(name, index, opcode.stack_effect(index) if
     ("CONTAINS_OP", -1, -2),
     ("CONVERT_VALUE", 0, -1),
     ("COPY", 1, lambda i: -1*i),
-    ("COPY_FREE_VARS", lambda i: i, 0),
+    ("COPY_FREE_VARS", 0, 0),
     ("DELETE_ATTR", -1, -1),
     ("DELETE_DEREF", 0, 0),
     ("DELETE_FAST", 0, 0),
