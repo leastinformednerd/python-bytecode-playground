@@ -1,0 +1,36 @@
+# s_expression : atomic_symbol "(" s_expression empty s_expression ")" list 
+s_expression : empty? (atom | list)
+   
+list : "(" s_expression (empty? s_expression empty?)* ")"
+
+atom : literal | op | atomic_symbol
+
+op : bin_op
+
+sum : "+"
+
+sub : "-"
+
+mul : "*"
+
+div : "/"
+
+lt : "<"
+
+eq : "=="
+
+gt : ">"
+
+or : "||"
+
+bin_op : sum | sub | mul | div | lt | eq | gt | or
+
+literal : number
+
+atomic_symbol : /([a-zA-Z]|:)([a-zA-Z1-9])*/
+
+number : "1".."9"+
+
+empty : (" " | "\n")+
+
+start : (s_expression empty?)+
