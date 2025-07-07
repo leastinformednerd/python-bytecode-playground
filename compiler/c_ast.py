@@ -120,3 +120,21 @@ class Return(Operation):
 @dataclass
 class DebugArbitaryBlock(Operation):
     block: blocks.Block
+
+class Module(Operation):
+    pass
+
+class Import(Operation):
+    names: list[str] = field(default_factory = list)
+
+@dataclass
+class NameBindingPattern(Operation):
+    name: str
+
+@dataclass
+class ClassPattern(Operation):
+    name: str
+
+@dataclass
+class AttrPattern(Operation):
+    name:str

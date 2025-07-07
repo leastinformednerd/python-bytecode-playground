@@ -171,7 +171,7 @@ class InstrInfo:
 
         return self.depth(arg)
 
-instruction_info_d = {name: InstrInfo(name, index, opcode.stack_effect(index) if isinstance(_height, int) and abs(_height) < 10 else _height, depth) for index, (name, _height, depth) in enumerate([
+instruction_info_d = {name: InstrInfo(name, index, _height if isinstance(_height, int) and abs(_height) < 10 else _height, depth) for index, (name, _height, depth) in enumerate([
     ("CACHE", 0, 0),
     ("BINARY_SLICE", -2, -3),
     ("BINARY_SUBSCR", -1, -2),
@@ -200,7 +200,9 @@ instruction_info_d = {name: InstrInfo(name, index, opcode.stack_effect(index) if
     ("MATCH_MAPPING", 1, -1),
     ("MATCH_SEQUENCE", 1, -1),
     ("NOP", 0, 0),
+    ("NOT_TAKEN", -999, -999), # Undocumented
     ("POP_EXCEPT", -1, -1),
+    ("POP_ITER", -1, -1), # Undocumented
     ("POP_TOP", -1, -1),
     ("PUSH_EXC_INFO", 1, -1),
     ("PUSH_NULL", 1, 0),
@@ -288,11 +290,15 @@ instruction_info_d = {name: InstrInfo(name, index, opcode.stack_effect(index) if
     ("UNPACK_EX", -999, -999), # > 2 byte instr so I'm going to pretend it doesn't exist
     ("UNPACK_SEQUENCE", lambda i: i-1, -1),
     ("YIELD_VALUE", 0, -1), # I'm actually unclear but I think this is correct
-    ] + [(f"<{x}>", -999, -999) for x in range(116, 149)]
-    + [("RESUME", 0, 0)] + [(f"<{x}>", -999, -99) for x in range(150, 237)]
+    ] + [(f"<{x}>", -999, -999) for x in range(118, 149)]
+    + [("RESUME", 0, 0)] + [(f"<{x}>", -999, -99) for x in range(150, 239)]
     # There's some more after this point but I don't know what they do (undocumented) or they have
     # an opcode greater than one byte which I thought is unencodable so not sure why they're there.
     # All the ones that are in the docs or I can infer can be implemented with others so I think that's ok for now
 )}
+
+# for this_name, actual_name in zip(instruction_info_d.keys(), dis.opname):
+#     if this_name != actual_name:
+#         print (this_name, actual_name)
 
 instruction_info_l = list(instruction_info_d.values())

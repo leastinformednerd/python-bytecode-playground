@@ -30,11 +30,12 @@ def compile_if_else(condition: ASTNode, success_branch: ASTNode, failure_branch:
             f = blocks.jump_if_false
 
     jump_header = compile(condition)
+    failure_branch = compile(failure_branch) if failure_branch is not None else blocks.noop_block()
     assert jump_header.height == 1, f"If statement conditions are expected to have height 1, found {jump_header.height}"
     return jump_header.then(
         f(
-            compile(failure_branch) if failure_branch is not None else blocks.noop_block(),
-            compile(success_branch)
+            failure_branch,
+            compile(success_branch) + Block.from_instr(instruction_info_d["JUMP_FORWARD"], len(failure_branch.instructions))
         )
     )
 
@@ -48,36 +49,48 @@ def compile(node: ASTNode) -> Block:
         case ASTNode(op = c_ast.Constant(value = value)):
             return Block.from_instr(instruction_info_d["LOAD_CONST"], Constant(value))
         
-        case ASTNode(op = c_ast.BinaryOp() as op, children = [lhs, rhs]):
-            lhs = compile(lhs)
-            assert lhs.depth >= 0, f"Inputs to binary operations must not touch the stack below, found {lhs.depth=}"
-            assert lhs.height == 1, f"Inputs to binary operations must have a height of 1, found {lhs.height}"
+        case ASTNode(op = c_ast.BinaryOp() as op, children = [_lhs, _rhs]):
+            try:
+                lhs = compile(_lhs)
+                assert lhs.depth >= 0, f"Inputs to binary operations must not touch the stack below, found {lhs.depth=}"
+                assert lhs.height == 1, f"Inputs to binary operations must have a height of 1, found {lhs.height}"
 
-            rhs = compile(rhs)
-            assert rhs.depth >= 0, f"Inputs to binary operations must not touch the stack below, found {rhs.depth=}"
-            assert rhs.height == 1, f"Inputs to binary operations must have a height of 1, found {rhs.height}"
+                rhs = compile(_rhs)
+                assert rhs.depth >= 0, f"Inputs to binary operations must not touch the stack below, found {rhs.depth=}"
+                assert rhs.height == 1, f"Inputs to binary operations must have a height of 1, found {rhs.height}"
+            except AssertionError as err:
+                print(f"{_rhs=} {_lhs=}")
+                raise err
             
             return lhs.then(rhs).then(Block.from_instr(instruction_info_d["BINARY_OP"], op.arg()))
         
         case ASTNode(op = c_ast.CompOp() as op, children = [lhs, rhs]):
-            lhs = compile(lhs)
-            assert lhs.depth >= 0, f"Inputs to compare operations must not touch the stack below, found {lhs.depth=}"
-            assert lhs.height == 1, f"Inputs to compare operations must have a height of 1, found {lhs.height}"
+            try:
+                lhs = compile(lhs)
+                assert lhs.depth >= 0, f"Inputs to compare operations must not touch the stack below, found {lhs.depth=}"
+                assert lhs.height == 1, f"Inputs to compare operations must have a height of 1, found {lhs.height}"
 
-            rhs = compile(rhs)
-            assert rhs.depth >= 0, f"Inputs to compare operations must not touch the stack below, found {rhs.depth=}"
-            assert rhs.height == 1, f"Inputs to compare operations must have a height of 1, found {rhs.height}"
+                rhs = compile(rhs)
+                assert rhs.depth >= 0, f"Inputs to compare operations must not touch the stack below, found {rhs.depth=}"
+                assert rhs.height == 1, f"Inputs to compare operations must have a height of 1, found {rhs.height}"
+            except AssertionError as err:
+                print(f"{rhs=} {lhs=}")
+                raise err
             
             return lhs.then(rhs).then(Block.from_instr(instruction_info_d["COMPARE_OP"], op.arg()))
         
         case ASTNode(op = c_ast.IsOp() as op, children = [lhs, rhs]):
-            lhs = compile(lhs)
-            assert lhs.depth >= 0, f"Inputs to `is` operations must not touch the stack below, found {lhs.depth=}"
-            assert lhs.height == 1, f"Inputs to `is` operations must have a height of 1, found {lhs.height}"
+            try:
+                lhs = compile(lhs)
+                assert lhs.depth >= 0, f"Inputs to `is` operations must not touch the stack below, found {lhs.depth=}"
+                assert lhs.height == 1, f"Inputs to `is` operations must have a height of 1, found {lhs.height}"
 
-            rhs = compile(rhs)
-            assert rhs.depth >= 0, f"Inputs to `is` operations must not touch the stack below, found {rhs.depth=}"
-            assert rhs.height == 1, f"Inputs to `is` operations must have a height of 1, found {rhs.height}"
+                rhs = compile(rhs)
+                assert rhs.depth >= 0, f"Inputs to `is` operations must not touch the stack below, found {rhs.depth=}"
+                assert rhs.height == 1, f"Inputs to `is` operations must have a height of 1, found {rhs.height}"
+            except AssertionError as err:
+                print(f"{rhs=} {lhs=}")
+                raise err
             
             return lhs.then(rhs).then(Block.from_instr(instruction_info_d["IS_OP"], 1*op.inverted))
             
@@ -178,13 +191,13 @@ def compile(node: ASTNode) -> Block:
             return block
         
         case _:
-            raise ValueError(f"Node {node} is malformed")
+            raise ValueError(f"Node with op={node.op} len={len(node.children)} {node} is malformed")
 
 def block_to_code_string(block: Block):
     return create_code_string((instr.opcode, instr.arg) for instr in block.instructions)
 
 def resolve_names(body: Block, filename: str = "main.py", name: str = "main") -> CodeType:
-    '''Resolve names from the block and compile it into a code object. Currently doesn't support function defs'''
+    '''Resolve names from the block and compile it into a code object.'''
     #body.args = body.args # Why did I do this
     n_args = len(body.args)
     n_cells = len(body.cells)
@@ -248,19 +261,24 @@ if __name__ == "__main__":
         return ASTNode(op = c_ast.Call(pop = True), children = [
             ASTNode(op = c_ast.LoadName("print", False, True)),
         ] + list(values))
-    
-    f_body = ASTNode(op = c_ast.Return(), children = [
-        ASTNode(op = c_ast.MakeFn(args = ["y"], name = "<anonymous>", closes_over = (Variable("x", True, False),)), children = [
-            ASTNode(op = c_ast.Return(), children = [
+
+    g_body = ASTNode(op = c_ast.Return(), children = [
                 ASTNode(op = c_ast.BinaryOp(op = "+"), children = [
                     ASTNode(op = c_ast.LoadName("x", True, False)),
                     ASTNode(op = c_ast.LoadName("y", True, False)),
                 ])
             ])
+
+    print(f"{compile(g_body)=}")
+    # exit()
+    
+    f_body = ASTNode(op = c_ast.Return(), children = [
+        ASTNode(op = c_ast.MakeFn(args = ["y"], name = "<anonymous>", closes_over = (Variable("x", True, False),)), children = [
+            g_body
         ])
     ])
 
-    print(compile(f_body))
+    # print(compile(f_body))
    
     define_f = ASTNode(op = c_ast.StoreName("f", False), children = [
         ASTNode(op = c_ast.MakeFn(args = ["x"], name = "f"), children = [f_body])
@@ -281,7 +299,7 @@ if __name__ == "__main__":
 
     call_f = compile(dbg_print(call_f)).pop_extraneous()
 
-    print(f"{define_f.max_height=} {call_f.max_height=}")
+    # print(f"{define_f.max_height=} {call_f.max_height=}")
 
     compiled = define_f + Block.early_ret()
 
