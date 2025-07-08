@@ -8,5 +8,12 @@ mod symbolic_evaluation;
 /// internal representation
 pub fn full_parse(code: &[u8]) {
     let instrs = parse(code).unwrap();
+    debug_print_parse_instrs(&instrs);
     let _ = symbolic_evaluation::eval_instructions(&instrs, &[], &[], &[]);
+}
+
+fn debug_print_parse_instrs(code: &[parse::ParseInstr]) {
+    for (index, instr) in code.iter().enumerate() {
+        println!("[{index}]: {:?} {}", instr.kind, instr.arg);
+    }
 }

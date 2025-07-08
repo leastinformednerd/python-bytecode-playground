@@ -5,12 +5,12 @@ use super::defs::{Instr, Name, PyConst, StackItem};
 use super::parse::{ParseInstr, ParseInstrKind};
 
 #[derive(Debug)]
-struct BasicBlock<'a> {
-    code: &'a [ParseInstr],
+struct BasicBlock {
+    code: Vec<ParseInstr>,
     children: BasicBlockChildren,
 }
 
-impl<'a> Display for BasicBlock<'a> {
+impl Display for BasicBlock {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.children {
             BasicBlockChildren::Diverges => write!(f, "Block diverges"),
@@ -23,21 +23,21 @@ impl<'a> Display for BasicBlock<'a> {
     }
 }
 
-impl<'a> PartialEq for BasicBlock<'a> {
+impl PartialEq for BasicBlock {
     fn eq(&self, other: &Self) -> bool {
         true
     }
 }
 
-impl<'a> Eq for BasicBlock<'a> {}
+impl Eq for BasicBlock {}
 
-impl<'a> PartialOrd for BasicBlock<'a> {
+impl PartialOrd for BasicBlock {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(std::cmp::Ordering::Equal)
     }
 }
 
-impl<'a> Ord for BasicBlock<'a> {
+impl Ord for BasicBlock {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         std::cmp::Ordering::Equal
     }
@@ -110,7 +110,7 @@ fn create_blocks(
 
     for (index, instr) in instrs.into_iter().enumerate() {
         if let Some(delta) = instr.jump() {
-            let jump_target = (index as isize + 1 + delta as isize) as usize;
+            let jump_target = (index as isize + delta as isize) as usize;
             if jump_target >= instrs.len() {
                 return Err(SymbolicExecutionError::OutOfBoundsJump);
             }
@@ -141,7 +141,7 @@ fn create_blocks(
             block_map.insert(
                 BasicBlockToken(0),
                 BasicBlock {
-                    code: instrs,
+                    code: remove_nops(instrs),
                     children: BasicBlockChildren::Diverges,
                 },
             );
@@ -150,14 +150,14 @@ fn create_blocks(
     };
 
     let mut prev = 0;
+
     // prev being 0 is semantically the boundary at the start of the root block
     // so it's being "moved" out of it
+
     boundaries.remove(&0);
-    // The final block ends at the end of the program code
-    boundaries.insert(instrs.len() - 1);
-    // let mut boundaries = boundaries
-    //     .into_iter()
-    //     .chain(std::iter::once(instrs.len() - 1));
+    // The last block ends at the end of the instructions
+    boundaries.insert(instrs.len());
+
     let mut boundaries = boundaries.into_iter();
     for boundary in &mut boundaries {
         let children;
@@ -177,7 +177,7 @@ fn create_blocks(
                     block_map.insert(
                         BasicBlockToken(prev),
                         BasicBlock {
-                            code: &instrs[prev..boundary],
+                            code: remove_nops(&instrs[prev..boundary]),
                             children,
                         },
                     );
@@ -192,7 +192,7 @@ fn create_blocks(
         block_map.insert(
             BasicBlockToken(prev),
             BasicBlock {
-                code: &instrs[prev..boundary],
+                code: remove_nops(&instrs[prev..boundary]),
                 children,
             },
         );
@@ -204,7 +204,7 @@ fn create_blocks(
         block_map.insert(
             BasicBlockToken(boundary),
             BasicBlock {
-                code: &instrs[prev..boundary],
+                code: remove_nops(&instrs[prev..boundary]),
                 children: BasicBlockChildren::Diverges,
             },
         );
@@ -212,4 +212,10 @@ fn create_blocks(
     }
 
     Ok(block_map)
+}
+
+fn remove_nops(code: &[ParseInstr]) -> Vec<ParseInstr> {
+    code.into_iter()
+        .filter_map(|instr| if !instr.is_nop() { Some(*instr) } else { None })
+        .collect::<Vec<_>>()
 }

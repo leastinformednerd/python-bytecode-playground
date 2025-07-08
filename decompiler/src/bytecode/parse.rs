@@ -4,7 +4,7 @@ pub enum ParseError {
     OddByteCount,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct ParseInstr {
     pub kind: ParseInstrKind,
     pub arg: i16,
@@ -27,8 +27,8 @@ impl ParseInstr {
             | ParseInstrKind::PopJumpIfTrue
             | ParseInstrKind::PopJumpIfNone
             | ParseInstrKind::PopJumpIfNotNone
-            | ParseInstrKind::JumpForward => Some(self.arg),
-            ParseInstrKind::JumpBackward => Some(-self.arg),
+            | ParseInstrKind::JumpForward => Some(self.arg + 1),
+            ParseInstrKind::JumpBackward => Some(-self.arg + 2),
             _ => None,
         }
     }
@@ -40,6 +40,13 @@ impl ParseInstr {
             | ParseInstrKind::PopJumpIfTrue
             | ParseInstrKind::PopJumpIfNone
             | ParseInstrKind::PopJumpIfNotNone => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_nop(&self) -> bool {
+        match self.kind {
+            ParseInstrKind::Cache | ParseInstrKind::NotTaken | ParseInstrKind::Nop => true,
             _ => false,
         }
     }
@@ -74,6 +81,7 @@ pub enum ParseInstrKind {
     NotTaken = 28,
     ReturnValue = 35,
     Resume = 149,
+    Nop = 27,
 }
 
 impl From<u8> for ParseInstrKind {
@@ -84,6 +92,7 @@ impl From<u8> for ParseInstrKind {
             9 => EndFor,
             16 => GetIter,
             23 => MakeFunction,
+            27 => Nop,
             28 => NotTaken,
             30 => PopIter,
             31 => PopTop,
