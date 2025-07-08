@@ -1,13 +1,16 @@
 #![allow(dead_code)]
 use std::rc::Rc;
 
-type Block = ();
+type Block = super::symbolic_evaluation::BlockToken;
 pub type Name = Rc<str>;
 
 #[derive(Debug, Clone)]
 pub enum StackItem {
     Derived(Box<Instr>),
-    Name(Name),
+    Local(Name),
+    Global(Name),
+    Const(PyConst),
+    Null,
 }
 
 #[derive(Debug, Clone)]
@@ -115,11 +118,37 @@ pub enum ComparisonOpKind {
     GreaterThanEquals,
 }
 
+impl TryFrom<u8> for ComparisonOp {
+    type Error = ();
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        let force_convert = value & 16 != 0;
+        let kind = match value >> 5 {
+            0 => ComparisonOpKind::LessThan,
+            1 => ComparisonOpKind::LessThanEquals,
+            2 => ComparisonOpKind::Equals,
+            3 => ComparisonOpKind::NotEqual,
+            4 => ComparisonOpKind::GreaterThan,
+            5 => ComparisonOpKind::GreaterThanEquals,
+            _ => return Err(()),
+        };
+        Ok(ComparisonOp {
+            kind,
+            force_convert,
+        })
+    }
+}
+
 pub type PyConst = Rc<PyConstInner>;
 
 #[derive(Debug)]
-pub enum PyConstInner {}
+pub enum PyConstInner {
+    Int(i64),
+    BigInt(String),
+    CodeObject(CodeObject),
+    None,
+}
 
+#[derive(Debug)]
 pub struct CodeObject {
     // co_name
     pub name: Name,
@@ -205,7 +234,8 @@ pub enum Instr {
     BuildName(Vec<StackItem>),
     BuildTuple(Vec<StackItem>),
     Call {
-        called: StackItem,
+        obj: StackItem,
+        meth: StackItem,
         args: Vec<StackItem>,
     },
     CallFunctionEx(StackItem, StackItem),
@@ -236,7 +266,11 @@ pub enum Instr {
         mapping: StackItem,
     },
     ExtendedArg,
-    ForIter(StackItem, Block),
+    ForIter {
+        cond: StackItem,
+        found_val: Block,
+        exhausted: Block,
+    },
     GetAwaitable(StackItem),
     ImportFrom(StackItem, StackItem),
     ImportName(StackItem),
@@ -270,10 +304,26 @@ pub enum Instr {
     MakeCell(Name),
     MapAdd(StackItem, StackItem, StackItem),
     MatchClass(StackItem, StackItem, StackItem),
-    PopJumpIfFalse(StackItem, Block),
-    PopJumpIfNone(StackItem, Block),
-    PopJumpIfNotNone(StackItem, Block),
-    PopJumpIfTrue(StackItem, Block),
+    PopJumpIfFalse {
+        cond: StackItem,
+        met: Block,
+        otherwise: Block,
+    },
+    PopJumpIfNone {
+        cond: StackItem,
+        met: Block,
+        otherwise: Block,
+    },
+    PopJumpIfNotNone {
+        cond: StackItem,
+        met: Block,
+        otherwise: Block,
+    },
+    PopJumpIfTrue {
+        cond: StackItem,
+        met: Block,
+        otherwise: Block,
+    },
     RaiseVarargs0,
     RaiseVarargs1,
     RaiseVarargs2,
@@ -287,10 +337,10 @@ pub enum Instr {
     SetUpdate(StackItem, StackItem),
     StoreAttr(StackItem, StackItem),
     StoreDeref(StackItem),
-    StoreFast(StackItem),
+    StoreFast(Name, StackItem),
     StoreFastLoadFast(StackItem),
     StoreFastStoreFast(StackItem, StackItem),
-    StoreGlobal(StackItem),
+    StoreGlobal(Name, StackItem),
     StoreName(StackItem),
     Swap(StackItem, StackItem),
     UnpackEx {

@@ -33,7 +33,7 @@ impl ParseInstr {
         }
     }
 
-    pub fn cond_jump(&self) -> bool {
+    pub fn is_cond_jump(&self) -> bool {
         match self.kind {
             ParseInstrKind::ForIter
             | ParseInstrKind::PopJumpIfFalse
@@ -47,6 +47,20 @@ impl ParseInstr {
     pub fn is_nop(&self) -> bool {
         match self.kind {
             ParseInstrKind::Cache | ParseInstrKind::NotTaken | ParseInstrKind::Nop => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_terminal(&self) -> bool {
+        match self.kind {
+            ParseInstrKind::ForIter
+            | ParseInstrKind::PopJumpIfFalse
+            | ParseInstrKind::PopJumpIfTrue
+            | ParseInstrKind::PopJumpIfNone
+            | ParseInstrKind::PopJumpIfNotNone
+            | ParseInstrKind::JumpForward
+            | ParseInstrKind::JumpBackward
+            | ParseInstrKind::ReturnValue => true,
             _ => false,
         }
     }
