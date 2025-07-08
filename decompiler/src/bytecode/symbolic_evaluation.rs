@@ -95,6 +95,8 @@ pub fn eval_instructions<'a>(
 ) -> Result<Vec<Instr>, SymbolicExecutionError> {
     let block_map = create_blocks(instrs)?;
 
+    println!("{block_map:#?}");
+
     todo!("END OF DEBUG");
 }
 
@@ -186,7 +188,17 @@ fn create_blocks(
                 }
             }
         } else {
-            children = BasicBlockChildren::Diverges;
+            children = match instrs[boundary - 1] {
+                ParseInstr {
+                    kind: ParseInstrKind::ReturnValue,
+                    ..
+                } => BasicBlockChildren::Diverges,
+                instr if instr.jump().is_some() => {
+                    panic!("A jump instruction leaked through the jump pass");
+                }
+
+                _ => BasicBlockChildren::FallsThroughTo(BasicBlockToken(boundary)),
+            };
         };
 
         block_map.insert(
@@ -201,11 +213,25 @@ fn create_blocks(
     }
 
     for boundary in boundaries {
+        println!("instr={:#?}", instrs[boundary - 1]);
+        let children = match instrs[boundary - 1] {
+            ParseInstr {
+                kind: ParseInstrKind::ReturnValue,
+                ..
+            } => BasicBlockChildren::Diverges,
+            instr if instr.jump().is_some() => {
+                panic!("A jump instruction leaked through the jump pass");
+            }
+
+            _ => BasicBlockChildren::FallsThroughTo(BasicBlockToken(boundary)),
+        };
+        println!("children = {children:#?}");
+
         block_map.insert(
-            BasicBlockToken(boundary),
+            BasicBlockToken(prev),
             BasicBlock {
                 code: remove_nops(&instrs[prev..boundary]),
-                children: BasicBlockChildren::Diverges,
+                children,
             },
         );
         prev = boundary;
