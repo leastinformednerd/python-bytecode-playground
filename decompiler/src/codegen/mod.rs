@@ -50,7 +50,7 @@ pub fn gen_code(graph: &HashMap<BasicBlockToken, AnnotatedBlock>, writer: impl W
         .keys()
         .for_each(|token| cfg_resolution::resolve_tags(*token, graph, &resolved_map));
     let resolved_map = resolved_map.into_inner();
-    println!("{resolved_map:#?}");
+    // println!("{resolved_map:#?}");
 
     let ctx = Context {
         writer: &RefCell::new(writer),
@@ -58,6 +58,7 @@ pub fn gen_code(graph: &HashMap<BasicBlockToken, AnnotatedBlock>, writer: impl W
         depth: 0,
     };
 
+    // println!("Resolving block at 0");
     for_block(&resolved_map[&BasicBlockToken::zero()], ctx);
 }
 
@@ -82,7 +83,9 @@ fn for_block<'a, 'b, W: Write>(block: &ResolvedBlock, ctx: Context<'a, 'b, W>) {
                 let _ = write!(&mut *ctx.writer.borrow_mut(), ":\n");
                 let mut deeper = ctx.clone();
                 deeper.depth += 1;
+                // println!("Resolving block at {body:?}");
                 for_block(&ctx[body], deeper);
+                // println!("Resolving block at {falls_through_to:?}");
                 for_block(&ctx[falls_through_to], ctx);
             } else {
                 // Strictly speaking this is not sufficient, but for now is fine
@@ -94,10 +97,11 @@ fn for_block<'a, 'b, W: Write>(block: &ResolvedBlock, ctx: Context<'a, 'b, W>) {
             body,
         } => {
             body.iter().for_each(|instr| for_instr(instr, ctx, true));
+            // println!("Resolving block at {to:?}");
             for_block(&ctx[to], ctx);
         }
         ResolvedBlock {
-            ast_tag: PT::Breaks(_),
+            ast_tag: PT::Breaks,
             body,
         } => {
             body.iter().for_each(|instr| for_instr(instr, ctx, true));
@@ -108,7 +112,7 @@ fn for_block<'a, 'b, W: Write>(block: &ResolvedBlock, ctx: Context<'a, 'b, W>) {
             );
         }
         ResolvedBlock {
-            ast_tag: PT::Continues(_),
+            ast_tag: PT::Continues,
             body,
         } => {
             body.iter().for_each(|instr| for_instr(instr, ctx, true));
@@ -136,7 +140,9 @@ fn for_block<'a, 'b, W: Write>(block: &ResolvedBlock, ctx: Context<'a, 'b, W>) {
             let _ = write!(&mut *ctx.writer.borrow_mut(), ":\n");
             let mut deeper = ctx.clone();
             deeper.depth += 1;
+            // println!("Resolving block at {body:?}");
             for_block(&ctx[body], deeper);
+            // println!("Resolving block at {falls_through_to:?}");
             for_block(&ctx[falls_through_to], ctx);
         }
         ResolvedBlock {
@@ -209,6 +215,7 @@ fn handle_if_else<'a, 'b, W: Write>(
     let _ = write!(&mut *ctx.writer.borrow_mut(), ":\n");
     let mut deeper = ctx.clone();
     deeper.depth += 1;
+    // println!("Resolving block at {body:?}");
     for_block(&ctx[&body], deeper);
     match &(ctx.clone())[&r#else] {
         ResolvedBlock {
@@ -242,7 +249,9 @@ fn handle_if_else<'a, 'b, W: Write>(
             );
             let mut deeper = ctx.clone();
             deeper.depth += 1;
+            // println!("Resolving block at {block:?}");
             for_block(&block, deeper);
+            // println!("Resolving block at {falls_through_to:?}");
             for_block(&ctx[&falls_through_to], ctx.clone());
         }
     }
@@ -258,7 +267,7 @@ fn handle_if<'a, 'b, W: Write>(
     if is_else {
         write_indented(
             &mut *ctx.writer.borrow_mut(),
-            format_args!("if "),
+            format_args!("elif "),
             ctx.depth,
         );
     } else {
@@ -272,7 +281,9 @@ fn handle_if<'a, 'b, W: Write>(
     let _ = write!(&mut *ctx.writer.borrow_mut(), ":\n");
     let mut deeper = ctx.clone();
     deeper.depth += 1;
+    // println!("Resolving block at {body:?}");
     for_block(&ctx[&body], deeper);
+    // println!("Resolving block at {falls_through_to:?}");
     for_block(&ctx[&falls_through_to], ctx.clone());
 }
 
@@ -332,10 +343,10 @@ fn for_instr<'a, 'b, W: Write>(instr: &Instr, ctx: Context<'a, 'b, W>, top_level
             let _ = write!(ctx.writer.borrow_mut(), " {op} ");
             for_stack_item(rhs, ctx);
         }
-        ForIterNext(item) | GetIter(item) => for_stack_item(item, ctx),
+        ForIterNext(item) | GetIter(item) | ToBool(item) => for_stack_item(item, ctx),
         instr => todo!("Haven't implemented {instr:?}"),
     }
     if top_level {
-        write!(ctx.writer.borrow_mut(), "\n");
+        let _ = write!(ctx.writer.borrow_mut(), "\n");
     }
 }

@@ -16,8 +16,8 @@ use crate::bytecode::{
 pub enum PseudoASTTag {
     FallsThrough(BasicBlockToken),
     // breaks and continues having targets is purely for debugging convenience
-    Breaks(BasicBlockToken),
-    Continues(BasicBlockToken),
+    Breaks,
+    Continues,
     WhileHead {
         jump: ConditionalJump,
         body: BasicBlockToken,
@@ -72,8 +72,8 @@ pub fn resolve_tags(
             falls_through_to: *exhausted,
             assignment: assignment.clone(),
         },
-        ControlFlowTag::JumpForward(to) => PseudoASTTag::Breaks(*to),
-        ControlFlowTag::JumpBack(to) => PseudoASTTag::Continues(*to),
+        ControlFlowTag::JumpForward(_) => PseudoASTTag::Breaks,
+        ControlFlowTag::JumpBack(_) => PseudoASTTag::Continues,
         ControlFlowTag::FallsThrough(to) => PseudoASTTag::FallsThrough(*to),
         ControlFlowTag::ConditionalJump {
             jump,
@@ -98,43 +98,29 @@ pub fn resolve_tags(
             )
             .is_some()
             {
+                let body;
+                let falls_through_to;
+                if let Some(AnnotatedBlock {
+                    cf_tag: ControlFlowTag::JumpBack(_),
+                    ..
+                }) = graph.get(otherwise)
+                {
+                    body = *met;
+                    falls_through_to = *otherwise;
+                } else {
+                    body = *otherwise;
+                    falls_through_to = *met;
+                }
                 PseudoASTTag::WhileHead {
                     jump: jump.clone(),
-                    body: *met,
-                    falls_through_to: *otherwise,
+                    body,
+                    falls_through_to,
                 }
-            } else if let Some(falls_through_to) = search_with_pred(
-                *otherwise,
-                |tok, graph| {
-                    if let Some(AnnotatedBlock {
-                        cf_tag: ControlFlowTag::JumpForward(jumps),
-                        ..
-                    }) = graph.get(&tok)
-                        && search_with_pred(
-                            *met,
-                            |tok, graph| {
-                                if let Some(AnnotatedBlock {
-                                    cf_tag: ControlFlowTag::JumpForward(falls),
-                                    ..
-                                }) = graph.get(&tok)
-                                    && falls == jumps
-                                {
-                                    true
-                                } else {
-                                    false
-                                }
-                            },
-                            graph,
-                        )
-                        .is_some()
-                    {
-                        true
-                    } else {
-                        false
-                    }
-                },
-                graph,
-            ) {
+            } else if let Some(falls_through_to) = is_if_else(*met, *otherwise, graph) {
+                // println!("fall to {falls_through_to:?} from {cf_tag:?}");
+                for _ in 0..10 {
+                    // println!("HERE!!!");
+                }
                 let mut guard = out_map.borrow_mut();
                 let tok = if let Some(AnnotatedBlock {
                     cf_tag: ControlFlowTag::JumpForward(tok),
@@ -150,6 +136,7 @@ pub fn resolve_tags(
                 find_elses(*otherwise, *tok, graph, &out);
                 find_elses(*met, *tok, graph, &out);
                 for block in out.into_inner() {
+                    // println!("found {block:?} from {cf_tag:?}");
                     guard.insert(
                         block,
                         ResolvedBlock {
@@ -186,61 +173,6 @@ pub fn resolve_tags(
     );
 }
 
-// This really should be cached properly
-fn terminates_with(
-    start: BasicBlockToken,
-    target: BasicBlockToken,
-    graph: &HashMap<BasicBlockToken, AnnotatedBlock>,
-) -> bool {
-    fn cached(
-        start: BasicBlockToken,
-        target: BasicBlockToken,
-        graph: &HashMap<BasicBlockToken, AnnotatedBlock>,
-        seen: &RefCell<HashSet<BasicBlockToken>>,
-    ) -> bool {
-        if seen.borrow().contains(&start) {
-            return false;
-        }
-
-        seen.borrow_mut().insert(start);
-
-        if start == target {
-            return true;
-        }
-
-        let AnnotatedBlock { cf_tag, .. } = graph
-            .get(&start)
-            .expect("Tried to find a node not in control flow graph");
-
-        match cf_tag {
-            ControlFlowTag::JumpForward(to) => cached(*to, target, graph, seen),
-            ControlFlowTag::JumpBack(to) => cached(*to, target, graph, seen),
-            ControlFlowTag::FallsThrough(to) => cached(*to, target, graph, seen),
-            ControlFlowTag::ConditionalJump { met, otherwise, .. } => {
-                if cached(*met, target, graph, seen) {
-                    return true;
-                }
-
-                cached(*otherwise, target, graph, seen)
-            }
-            ControlFlowTag::ForIter {
-                found, exhausted, ..
-            } => {
-                if cached(*found, target, graph, seen) {
-                    return true;
-                }
-
-                cached(*exhausted, target, graph, seen)
-            }
-            ControlFlowTag::Returns(_) => false,
-            ControlFlowTag::Dummy => unreachable!("Dummy leaked"),
-        }
-    }
-
-    let seen = RefCell::new(HashSet::new());
-    cached(start, target, graph, &seen)
-}
-
 fn search_with_pred(
     start: BasicBlockToken,
     pred: impl Fn(BasicBlockToken, &HashMap<BasicBlockToken, AnnotatedBlock>) -> bool,
@@ -268,7 +200,9 @@ fn search_with_pred(
 
         match cf_tag {
             ControlFlowTag::JumpForward(to) => cached(*to, pred, graph, seen),
-            ControlFlowTag::JumpBack(to) => cached(*to, pred, graph, seen),
+            ControlFlowTag::JumpBack(_) => {
+                return None;
+            }
             ControlFlowTag::FallsThrough(to) => cached(*to, pred, graph, seen),
             ControlFlowTag::ConditionalJump { met, otherwise, .. } => {
                 if let Some(token) = cached(*met, pred, graph, seen) {
@@ -312,8 +246,6 @@ fn find_elses(
             return;
         }
 
-        println!("Trying to find elses at {start:?}");
-
         seen.borrow_mut().insert(start);
 
         let AnnotatedBlock { cf_tag, .. } = graph
@@ -322,11 +254,13 @@ fn find_elses(
 
         match cf_tag {
             ControlFlowTag::JumpForward(to) | ControlFlowTag::FallsThrough(to) if *to == target => {
-                println!("Found else at {start:?} to {to:?}");
+                // println!("patching {start:?}");
                 out.borrow_mut().insert(start);
             }
             ControlFlowTag::JumpForward(to) => cached(*to, target, graph, seen, out),
-            ControlFlowTag::JumpBack(to) => cached(*to, target, graph, seen, out),
+            ControlFlowTag::JumpBack(_) => {
+                return;
+            }
             ControlFlowTag::FallsThrough(to) => cached(*to, target, graph, seen, out),
             ControlFlowTag::ConditionalJump { met, otherwise, .. } => {
                 cached(*met, target, graph, seen, out);
@@ -345,4 +279,61 @@ fn find_elses(
 
     let seen = RefCell::new(HashSet::new());
     cached(start, target, graph, &seen, &out);
+}
+
+fn is_if_else(
+    met: BasicBlockToken,
+    otherwise: BasicBlockToken,
+    graph: &HashMap<BasicBlockToken, AnnotatedBlock>,
+) -> Option<BasicBlockToken> {
+    if let Some(tok) = is_if_else_check(met, otherwise, graph) {
+        return Some(tok);
+    }
+    return is_if_else_check(otherwise, met, graph);
+}
+
+fn is_if_else_check(
+    start: BasicBlockToken,
+    target: BasicBlockToken,
+    graph: &HashMap<BasicBlockToken, AnnotatedBlock>,
+) -> Option<BasicBlockToken> {
+    if let Some(falls_through_to) = search_with_pred(
+        start,
+        |tok, graph| {
+            if let Some(AnnotatedBlock {
+                cf_tag: ControlFlowTag::JumpForward(jumps),
+                ..
+            }) = graph.get(&tok)
+                && search_with_pred(
+                    target,
+                    |tok, graph| {
+                        if let Some(AnnotatedBlock {
+                            cf_tag: ControlFlowTag::JumpForward(falls) | ControlFlowTag::FallsThrough(falls),
+                            ..
+                        }) = graph.get(&tok)
+                            && falls == jumps
+                        {
+                            true
+                        } else {
+                            false
+                        }
+                    },
+                    graph,
+                )
+                .is_some()
+            {
+                true
+            } else {
+                false
+            }
+        },
+        graph,
+    ) && (falls_through_to != target || true)
+    {
+        // println!("Positive is if else check from {start:?}, {target:?} to {falls_through_to:?}");
+        Some(falls_through_to)
+    } else {
+        // println!("Negative is if else check from {start:?}, {target:?}");
+        None
+    }
 }

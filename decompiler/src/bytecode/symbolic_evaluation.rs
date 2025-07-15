@@ -150,12 +150,6 @@ pub struct AnnotatedBlock {
     pub cf_tag: ControlFlowTag,
 }
 
-impl AnnotatedBlock {
-    pub fn tag(&self) -> &ControlFlowTag {
-        return &self.cf_tag;
-    }
-}
-
 #[derive(Debug, Clone)]
 pub enum ControlFlowTag {
     FallsThrough(BasicBlockToken),
@@ -175,8 +169,29 @@ pub enum ControlFlowTag {
     Dummy,
 }
 
+impl ControlFlowTag {
+    fn norm(self) -> ControlFlowTag {
+        match self {
+            ControlFlowTag::ConditionalJump {
+                jump:
+                    jump @ ConditionalJump {
+                        kind: ConditionKind::True | ConditionKind::None,
+                        ..
+                    },
+                met,
+                otherwise,
+            } => Self::ConditionalJump {
+                jump,
+                met: otherwise,
+                otherwise: met,
+            },
+            _ => self,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
-enum ConditionKind {
+pub enum ConditionKind {
     False,
     True,
     None,
@@ -261,7 +276,16 @@ fn eval_block<'a>(block: &BasicBlock, mut ctx: Context<'a>) -> Result<(), Symbol
             I {
                 kind: K::LoadFast | K::LoadFastChecked,
                 arg,
-            } => ctx.stack.push(S::Global(ctx.locals[*arg as usize].clone())),
+            } => ctx.stack.push(S::Local(ctx.locals[*arg as usize].clone())),
+            I {
+                kind: K::LoadFastLoadFast,
+                arg,
+            } => {
+                ctx.stack
+                    .push(S::Local(ctx.locals[*arg as usize >> 4].clone()));
+                ctx.stack
+                    .push(S::Local(ctx.locals[*arg as usize & 15].clone()))
+            }
             I {
                 kind: K::StoreFast,
                 arg,
@@ -393,6 +417,7 @@ fn eval_block<'a>(block: &BasicBlock, mut ctx: Context<'a>) -> Result<(), Symbol
                     met,
                     otherwise,
                 }
+                .norm()
             }
             I {
                 kind: K::PopJumpIfFalse,
@@ -423,6 +448,7 @@ fn eval_block<'a>(block: &BasicBlock, mut ctx: Context<'a>) -> Result<(), Symbol
                     met,
                     otherwise,
                 }
+                .norm()
             }
             I {
                 kind: K::PopJumpIfNotNone,

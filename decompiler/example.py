@@ -24,3 +24,16 @@ def h(x):
             else:
                 print(x)
             print(x)
+
+def i(a,b,c,d):
+    print(a if b>c else d)
+
+def j(x):
+    y = int(x)
+    acc = 0
+    for i in range(y):
+        acc += i
+    if acc == (y*(y-1))//2:
+        print("Correctly found that sum of 0..x = x*(x+1)/2")
+    else:
+        print("Incorrecly analysed the sum of 0..x")

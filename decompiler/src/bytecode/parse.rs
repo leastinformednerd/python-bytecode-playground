@@ -97,6 +97,7 @@ pub enum ParseInstrKind {
     ReturnValue = 35,
     Resume = 149,
     Nop = 27,
+    LoadFastLoadFast = 86,
 }
 
 impl From<u8> for ParseInstrKind {
@@ -122,6 +123,7 @@ impl From<u8> for ParseInstrKind {
             81 => LoadConst,
             83 => LoadFast,
             85 => LoadFastChecked,
+            86 => LoadFastLoadFast,
             89 => LoadGlobal,
             91 => LoadSmallInt,
             97 => PopJumpIfFalse,

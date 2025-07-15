@@ -194,6 +194,7 @@ pub enum PyConstInner {
     Int(i64),
     BigInt(String),
     CodeObject(CodeObject),
+    StringLiteral(Rc<str>),
     None,
 }
 
@@ -206,6 +207,7 @@ impl PyConstInner {
             PyConstInner::CodeObject { .. } => {
                 panic!("Tried to emit code for a codeobject constant which isn't possible")
             }
+            PyConstInner::StringLiteral(s) => format!("\"{s}\""),
         }
     }
 }
