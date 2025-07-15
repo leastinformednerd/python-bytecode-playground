@@ -2,14 +2,14 @@ def f(x):
     while x:
         if x * 2:
            print(2)
-        else:
-            print(3)
+           continue
+        print(3)
 
 def g(x):
     for i in range(x):
         if i - 5 == 0:
             continue
-        elif i - 7 == 8:
+        if i - 7 == 8:
             break
     if i - 11 == 9:
         return 5
