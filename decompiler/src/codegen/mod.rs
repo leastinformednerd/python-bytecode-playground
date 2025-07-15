@@ -334,14 +334,18 @@ fn for_instr<'a, 'b, W: Write>(instr: &Instr, ctx: Context<'a, 'b, W>, top_level
             let _ = write!(ctx.writer.borrow_mut(), ")");
         }
         CompareOp(op, lhs, rhs) => {
+            let _ = write!(ctx.writer.borrow_mut(), "(");
             for_stack_item(lhs, ctx);
             let _ = write!(ctx.writer.borrow_mut(), " {op} ");
             for_stack_item(rhs, ctx);
+            let _ = write!(ctx.writer.borrow_mut(), ")");
         }
         BinaryOp(op, lhs, rhs) => {
+            let _ = write!(ctx.writer.borrow_mut(), "(");
             for_stack_item(lhs, ctx);
             let _ = write!(ctx.writer.borrow_mut(), " {op} ");
             for_stack_item(rhs, ctx);
+            let _ = write!(ctx.writer.borrow_mut(), ")");
         }
         ForIterNext(item) | GetIter(item) | ToBool(item) => for_stack_item(item, ctx),
         instr => todo!("Haven't implemented {instr:?}"),
