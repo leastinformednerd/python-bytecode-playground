@@ -22,12 +22,12 @@ impl ParseInstr {
 impl ParseInstr {
     pub fn jump(&self) -> Option<i16> {
         match self.kind {
-            ParseInstrKind::ForIter
-            | ParseInstrKind::PopJumpIfFalse
+            ParseInstrKind::PopJumpIfFalse
             | ParseInstrKind::PopJumpIfTrue
             | ParseInstrKind::PopJumpIfNone
             | ParseInstrKind::PopJumpIfNotNone
-            | ParseInstrKind::JumpForward => Some(self.arg + 1),
+            | ParseInstrKind::ForIter => Some(self.arg + 2),
+            ParseInstrKind::JumpForward => Some(self.arg + 1),
             ParseInstrKind::JumpBackward => Some(-self.arg + 2),
             _ => None,
         }
@@ -73,6 +73,7 @@ pub enum ParseInstrKind {
     LoadGlobal = 89,
     LoadSmallInt = 91,
     LoadFast = 83,
+    LoadFastChecked = 85,
     StoreFast = 109,
     StoreGlobal = 112,
     EndFor = 9,
@@ -120,6 +121,7 @@ impl From<u8> for ParseInstrKind {
             76 => JumpForward,
             81 => LoadConst,
             83 => LoadFast,
+            85 => LoadFastChecked,
             89 => LoadGlobal,
             91 => LoadSmallInt,
             97 => PopJumpIfFalse,

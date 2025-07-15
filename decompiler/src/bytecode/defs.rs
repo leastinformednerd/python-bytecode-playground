@@ -11,6 +11,7 @@ pub enum StackItem {
     Global(Name),
     Const(PyConst),
     Null,
+    DummyIter,
 }
 
 #[derive(Debug, Clone)]
@@ -102,6 +103,40 @@ impl TryFrom<u8> for BinaryOp {
     }
 }
 
+impl std::fmt::Display for BinaryOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use BinaryOp::*;
+        f.write_str(match self {
+            Plus => "+",
+            PlusEquals => "+=",
+            Minus => "-",
+            MinusEquals => "-=",
+            Times => "*",
+            TimesEquals => "*=",
+            Div => "/",
+            DivEquals => "/=",
+            TrueDiv => "//",
+            TrueDivEquals => "//=",
+            Mod => "%",
+            ModEquals => "%=",
+            MatMul => "@",
+            MatMulEquals => "@=",
+            StarStar => "**",
+            StarStarEquals => "**=",
+            ShiftLeft => "<<",
+            ShiftLeftEquals => "<<=",
+            ShiftRight => ">>",
+            ShiftRightEquals => ">>=",
+            And => "&",
+            AndEquals => "&=",
+            Or => "|",
+            OrEquals => "|=",
+            Xor => "^",
+            XorEquals => "^=",
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ComparisonOp {
     pub kind: ComparisonOpKind,
@@ -116,6 +151,20 @@ pub enum ComparisonOpKind {
     NotEqual,
     GreaterThan,
     GreaterThanEquals,
+}
+
+impl std::fmt::Display for ComparisonOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use ComparisonOpKind::*;
+        f.write_str(match self.kind {
+            LessThan => "<",
+            LessThanEquals => "<=",
+            Equals => "==",
+            NotEqual => "!=",
+            GreaterThan => ">",
+            GreaterThanEquals => ">=",
+        })
+    }
 }
 
 impl TryFrom<u8> for ComparisonOp {
@@ -146,6 +195,19 @@ pub enum PyConstInner {
     BigInt(String),
     CodeObject(CodeObject),
     None,
+}
+
+impl PyConstInner {
+    pub fn emit_code(&self) -> String {
+        match self {
+            PyConstInner::Int(n) => n.to_string(),
+            PyConstInner::BigInt(n) => n.clone(),
+            PyConstInner::None => "None".into(),
+            PyConstInner::CodeObject { .. } => {
+                panic!("Tried to emit code for a codeobject constant which isn't possible")
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -267,7 +329,7 @@ pub enum Instr {
     },
     ExtendedArg,
     ForIter {
-        cond: StackItem,
+        iter: StackItem,
         found_val: Block,
         exhausted: Block,
     },
@@ -351,4 +413,6 @@ pub enum Instr {
     UnpackSequence(StackItem, u8),
     YieldValue(StackItem),
     Resume,
+    // Pseudo-instruction
+    ForIterNext(StackItem),
 }

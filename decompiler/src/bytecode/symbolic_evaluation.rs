@@ -16,7 +16,8 @@ macro_rules! pop_into {
 
 #[derive(Debug)]
 struct BasicBlock {
-    at: BasicBlockToken,
+    at: usize,
+    to: usize,
     code: Vec<ParseInstr>,
     children: BasicBlockChildren,
 }
@@ -42,6 +43,10 @@ impl BasicBlock {
             BasicBlockChildren::Diverges => Ok(()),
             _ => Err(SymbolicEvaluationError::WrongBlockChildCount),
         }
+    }
+
+    fn get_token(&self) -> BasicBlockToken {
+        BasicBlockToken(self.at)
     }
 }
 
@@ -108,6 +113,12 @@ enum BasicBlockChildren {
 // guaranteed to start at that point.
 pub struct BasicBlockToken(usize);
 
+impl BasicBlockToken {
+    pub fn zero() -> Self {
+        BasicBlockToken(0)
+    }
+}
+
 // This is just so I can what I use to refer to blocks externally to this
 // module as easily
 pub type BlockToken = BasicBlockToken;
@@ -121,7 +132,7 @@ pub struct Context<'a> {
     consts: &'a [PyConst],
     globals: &'a [Name],
     block_map: &'a HashMap<BasicBlockToken, BasicBlock>,
-    out_map: &'a RefCell<HashMap<BasicBlockToken, Vec<Instr>>>,
+    out_map: &'a RefCell<HashMap<BasicBlockToken, AnnotatedBlock>>,
 }
 
 #[derive(Debug)]
@@ -130,6 +141,52 @@ pub enum SymbolicEvaluationError {
     MissingStackItem,
     InvalidOperationTag,
     WrongBlockChildCount,
+    MissingForAssign,
+}
+
+#[derive(Debug)]
+pub struct AnnotatedBlock {
+    pub body: Vec<Instr>,
+    pub cf_tag: ControlFlowTag,
+}
+
+impl AnnotatedBlock {
+    pub fn tag(&self) -> &ControlFlowTag {
+        return &self.cf_tag;
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum ControlFlowTag {
+    FallsThrough(BasicBlockToken),
+    JumpBack(BasicBlockToken),
+    JumpForward(BasicBlockToken),
+    ConditionalJump {
+        jump: ConditionalJump,
+        met: BasicBlockToken,
+        otherwise: BasicBlockToken,
+    },
+    ForIter {
+        assignment: Instr,
+        found: BasicBlockToken,
+        exhausted: BasicBlockToken,
+    },
+    Returns(StackItem),
+    Dummy,
+}
+
+#[derive(Debug, Clone)]
+enum ConditionKind {
+    False,
+    True,
+    None,
+    NotNone,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConditionalJump {
+    pub kind: ConditionKind,
+    pub cond: StackItem,
 }
 
 /// Eval instructions takes the necessary parts of a code object and returns a
@@ -140,7 +197,7 @@ pub fn eval_instructions<'a>(
     locals: &'a [Name],
     globals: &'a [Name],
     consts: &'a [PyConst],
-) -> Result<HashMap<BasicBlockToken, Vec<Instr>>, SymbolicEvaluationError> {
+) -> Result<HashMap<BasicBlockToken, AnnotatedBlock>, SymbolicEvaluationError> {
     let block_map = create_blocks(instrs)?;
     let out_map = RefCell::new(HashMap::new());
     let ctx = Context {
@@ -152,7 +209,7 @@ pub fn eval_instructions<'a>(
         consts,
     };
 
-    eval_block(&block_map[&BasicBlockToken(0)], ctx)?;
+    eval_block(&block_map[&BasicBlockToken::zero()], ctx)?;
 
     // This is hacky, but it can't fail
     // .take() also shouldn't fail but there's no take() variant that returns
@@ -161,7 +218,7 @@ pub fn eval_instructions<'a>(
 }
 
 fn eval_block<'a>(block: &BasicBlock, mut ctx: Context<'a>) -> Result<(), SymbolicEvaluationError> {
-    if ctx.out_map.borrow().contains_key(&block.at) {
+    if ctx.out_map.borrow().contains_key(&block.get_token()) {
         return Ok(());
     }
     use ParseInstr as I;
@@ -175,7 +232,10 @@ fn eval_block<'a>(block: &BasicBlock, mut ctx: Context<'a>) -> Result<(), Symbol
                 if index == block.code.len() - 1 {
                     break;
                 } else {
-                    panic!("Found a terminal that wasn't at the end of a block");
+                    panic!(
+                        "Found a terminal that wasn't at the end of a block at index={index}, starting {:?}",
+                        block.at
+                    );
                 }
             }
             I {
@@ -199,15 +259,9 @@ fn eval_block<'a>(block: &BasicBlock, mut ctx: Context<'a>) -> Result<(), Symbol
                 .stack
                 .push(S::Const(std::rc::Rc::new(PyConstInner::Int(*arg as i64)))),
             I {
-                kind: K::LoadFast,
+                kind: K::LoadFast | K::LoadFastChecked,
                 arg,
-            } => {
-                if arg & 1 == 1 {
-                    ctx.stack.push(S::Null)
-                };
-                ctx.stack
-                    .push(S::Global(ctx.locals[*arg as usize >> 1].clone()))
-            }
+            } => ctx.stack.push(S::Global(ctx.locals[*arg as usize].clone())),
             I {
                 kind: K::StoreFast,
                 arg,
@@ -223,12 +277,22 @@ fn eval_block<'a>(block: &BasicBlock, mut ctx: Context<'a>) -> Result<(), Symbol
                 acc.push(Instr::StoreGlobal(ctx.globals[*arg as usize].clone(), top));
             }
             I {
-                kind: K::EndFor | K::PopTop | K::PopIter,
+                kind: K::PopTop, ..
+            } => {
+                pop_into!(ctx, top);
+                if let StackItem::Derived(b) = top
+                    && let call @ Instr::Call { .. } = *b
+                {
+                    acc.push(call);
+                }
+            }
+            I {
+                kind: K::EndFor | K::PopIter,
                 ..
             } => {
-                ctx.stack
-                    .pop()
-                    .ok_or(SymbolicEvaluationError::MissingStackItem)?;
+                // These, in the interpreter, each pop an item off the stack
+                // they always come in pairs together and always at the end of a for
+                // It's easier to just never push the things they clean up in the first place
             }
             I {
                 kind: K::GetIter, ..
@@ -300,7 +364,7 @@ fn eval_block<'a>(block: &BasicBlock, mut ctx: Context<'a>) -> Result<(), Symbol
                 pop_into!(ctx, meth, obj);
                 let instr = Instr::Call { obj, meth, args };
                 ctx.stack.push(StackItem::Derived(Box::new(instr.clone())));
-                acc.push(instr);
+                // acc.push(instr);
             }
             I {
                 kind: K::Resume, ..
@@ -310,18 +374,22 @@ fn eval_block<'a>(block: &BasicBlock, mut ctx: Context<'a>) -> Result<(), Symbol
         };
     }
 
+    let cf_tag;
     if let Some(terminal) = block.code.last()
         && terminal.is_terminal()
     {
-        let instr = match terminal {
+        cf_tag = match terminal {
             I {
                 kind: K::PopJumpIfTrue,
                 ..
             } => {
                 pop_into!(ctx, cond);
                 let (met, otherwise) = block.get2()?;
-                Instr::PopJumpIfTrue {
-                    cond,
+                ControlFlowTag::ConditionalJump {
+                    jump: ConditionalJump {
+                        kind: ConditionKind::True,
+                        cond,
+                    },
                     met,
                     otherwise,
                 }
@@ -332,8 +400,11 @@ fn eval_block<'a>(block: &BasicBlock, mut ctx: Context<'a>) -> Result<(), Symbol
             } => {
                 pop_into!(ctx, cond);
                 let (met, otherwise) = block.get2()?;
-                Instr::PopJumpIfFalse {
-                    cond,
+                ControlFlowTag::ConditionalJump {
+                    jump: ConditionalJump {
+                        kind: ConditionKind::False,
+                        cond,
+                    },
                     met,
                     otherwise,
                 }
@@ -344,8 +415,11 @@ fn eval_block<'a>(block: &BasicBlock, mut ctx: Context<'a>) -> Result<(), Symbol
             } => {
                 pop_into!(ctx, cond);
                 let (met, otherwise) = block.get2()?;
-                Instr::PopJumpIfNone {
-                    cond,
+                ControlFlowTag::ConditionalJump {
+                    jump: ConditionalJump {
+                        kind: ConditionKind::None,
+                        cond,
+                    },
                     met,
                     otherwise,
                 }
@@ -356,8 +430,11 @@ fn eval_block<'a>(block: &BasicBlock, mut ctx: Context<'a>) -> Result<(), Symbol
             } => {
                 pop_into!(ctx, cond);
                 let (met, otherwise) = block.get2()?;
-                Instr::PopJumpIfNotNone {
-                    cond,
+                ControlFlowTag::ConditionalJump {
+                    jump: ConditionalJump {
+                        kind: ConditionKind::NotNone,
+                        cond,
+                    },
                     met,
                     otherwise,
                 }
@@ -365,36 +442,92 @@ fn eval_block<'a>(block: &BasicBlock, mut ctx: Context<'a>) -> Result<(), Symbol
             I {
                 kind: K::ForIter, ..
             } => {
-                pop_into!(ctx, cond);
-                let (found_val, exhausted) = block.get2()?;
-                Instr::ForIter {
-                    cond,
-                    found_val,
+                pop_into!(ctx, iter);
+                let (exhausted, found) = block.get2()?;
+
+                // This paragraph is a stupid hack to handle `for` loops properly
+                let Context {
+                    mut stack,
+                    locals,
+                    consts,
+                    globals,
+                    block_map,
+                    out_map,
+                } = ctx.clone();
+                stack.push(S::DummyIter);
+                stack.push(S::Derived(Box::new(Instr::ForIterNext(iter.clone()))));
+                let mut guard = out_map.borrow_mut();
+                guard.remove(&found);
+                guard.insert(
+                    block.get_token(),
+                    AnnotatedBlock {
+                        body: Vec::new(),
+                        cf_tag: ControlFlowTag::Dummy,
+                    },
+                );
+                drop(guard);
+                eval_block(
+                    &block_map[&found],
+                    Context {
+                        stack,
+                        locals,
+                        consts,
+                        globals,
+                        block_map,
+                        out_map,
+                    },
+                )?;
+
+                let mut overall = out_map
+                    .borrow_mut()
+                    .remove(&found)
+                    .expect("For block doesn't have inner");
+
+                if overall.body.len() == 0 {
+                    return Err(SymbolicEvaluationError::MissingForAssign);
+                }
+
+                let assignment = overall.body.remove(0);
+
+                out_map.borrow_mut().insert(
+                    found,
+                    AnnotatedBlock {
+                        body: overall.body,
+                        cf_tag: overall.cf_tag,
+                    },
+                );
+
+                ControlFlowTag::ForIter {
+                    assignment,
+                    found,
                     exhausted,
                 }
             }
             I {
                 kind: K::JumpBackward,
                 ..
-            } => Instr::JumpBackward(block.get1()?),
+            } => ControlFlowTag::JumpBack(block.get1()?),
             I {
                 kind: K::JumpForward,
                 ..
-            } => Instr::JumpForward(block.get1()?),
+            } => ControlFlowTag::JumpForward(block.get1()?),
             I {
                 kind: K::ReturnValue,
                 ..
             } => {
                 pop_into!(ctx, ret);
                 block.get0()?;
-                Instr::ReturnValue(ret)
+                ControlFlowTag::Returns(ret)
             }
             _ => unreachable!(),
         };
-        acc.push(instr);
+    } else {
+        cf_tag = ControlFlowTag::FallsThrough(BasicBlockToken(block.to))
     }
 
-    ctx.out_map.borrow_mut().insert(block.at, acc);
+    ctx.out_map
+        .borrow_mut()
+        .insert(block.get_token(), AnnotatedBlock { body: acc, cf_tag });
 
     match block.children {
         BasicBlockChildren::CondJump {
@@ -404,8 +537,8 @@ fn eval_block<'a>(block: &BasicBlock, mut ctx: Context<'a>) -> Result<(), Symbol
             eval_block(&ctx.block_map[&cond_met], ctx.clone())?;
             eval_block(&ctx.block_map[&otherwise], ctx)?;
         }
-        BasicBlockChildren::LeadsTo(block) => {
-            eval_block(&ctx.block_map[&block], ctx)?;
+        BasicBlockChildren::LeadsTo(to) => {
+            eval_block(&ctx.block_map[&to], ctx)?;
         }
         BasicBlockChildren::Diverges => {}
     }
@@ -445,6 +578,8 @@ fn create_blocks(
             boundaries.insert(jump_target);
 
             boundaries.insert(index + 1);
+        } else if instr.is_terminal() {
+            boundaries.insert(index + 1);
         }
     }
 
@@ -454,9 +589,10 @@ fn create_blocks(
         Some(n) => *n,
         None => {
             block_map.insert(
-                BasicBlockToken(0),
+                BasicBlockToken::zero(),
                 BasicBlock {
-                    at: BasicBlockToken(0),
+                    at: 0,
+                    to: instrs.len() - 1,
                     code: remove_nops(instrs),
                     children: BasicBlockChildren::Diverges,
                 },
@@ -493,7 +629,8 @@ fn create_blocks(
                     block_map.insert(
                         BasicBlockToken(prev),
                         BasicBlock {
-                            at: BasicBlockToken(prev),
+                            at: prev,
+                            to: boundary - 1,
                             code: remove_nops(&instrs[prev..boundary]),
                             children,
                         },
@@ -519,7 +656,8 @@ fn create_blocks(
         block_map.insert(
             BasicBlockToken(prev),
             BasicBlock {
-                at: BasicBlockToken(prev),
+                at: prev,
+                to: boundary,
                 code: remove_nops(&instrs[prev..boundary]),
                 children,
             },
@@ -529,7 +667,6 @@ fn create_blocks(
     }
 
     for boundary in boundaries {
-        println!("instr={:#?}", instrs[boundary - 1]);
         let children = match instrs[boundary - 1] {
             ParseInstr {
                 kind: ParseInstrKind::ReturnValue,
@@ -541,12 +678,12 @@ fn create_blocks(
 
             _ => BasicBlockChildren::LeadsTo(BasicBlockToken(boundary)),
         };
-        println!("children = {children:#?}");
 
         block_map.insert(
             BasicBlockToken(prev),
             BasicBlock {
-                at: BasicBlockToken(prev),
+                at: prev,
+                to: boundary,
                 code: remove_nops(&instrs[prev..boundary]),
                 children,
             },
@@ -559,6 +696,7 @@ fn create_blocks(
 
 fn remove_nops(code: &[ParseInstr]) -> Vec<ParseInstr> {
     code.into_iter()
-        .filter_map(|instr| if !instr.is_nop() { Some(*instr) } else { None })
+        .map(|a| *a)
+        // .filter_map(|instr| if !instr.is_nop() { Some(*instr) } else { None })
         .collect::<Vec<_>>()
 }
