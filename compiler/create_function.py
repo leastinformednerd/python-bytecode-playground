@@ -11,7 +11,6 @@ def create_op_call(op: str | int, arg: int | None) -> bytes:
     if not isinstance(op, int):
         raise TypeError(f"Expected argument of type 'str' or 'int' got {type(op)}")
 
-    # print(f"{op=},{dis.opname[op]=},{blocks.instruction_info_l[op]=}")
     return bytes([op, arg if arg is not None else 0])
 
 def create_code_string(instrs: Iterator[(int | str, int)]):

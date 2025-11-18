@@ -12,6 +12,7 @@ def compile_if_else(condition: ASTNode, success_branch: ASTNode, failure_branch:
     f=None
     match condition:
         # TODO: Add case for if not condition. f = jump_if_true
+            # strictly speaking this is not necessary, but it's a nice optimisation
         
         case ASTNode(op = c_ast.CompOp() as op):
             op.force_convert = True
@@ -140,7 +141,7 @@ def compile(node: ASTNode) -> Block:
             b = blocks.noop_block()
             for arg_expr in args:
                 arg_expr = compile(arg_expr)
-                assert arg_expr.height > 0, f"function arguments must have height > 0, found {arg_expr.height}"
+                assert arg_expr.height == 1, f"function arguments must have height == 1, found {arg_expr.height}"
                 b = b.then(arg_expr)
             
             return func.then(b).then(Block.from_instr(instruction_info_d["CALL"], len(args)))\
@@ -198,7 +199,6 @@ def block_to_code_string(block: Block):
 
 def resolve_names(body: Block, filename: str = "main.py", name: str = "main") -> CodeType:
     '''Resolve names from the block and compile it into a code object.'''
-    #body.args = body.args # Why did I do this
     n_args = len(body.args)
     n_cells = len(body.cells)
     
@@ -209,7 +209,6 @@ def resolve_names(body: Block, filename: str = "main.py", name: str = "main") ->
     locals_d = {name: index for index, name in enumerate(locals)}
     globals_d = {}
     for instr in body.instructions:
-        # print(blocks.instruction_info_l[instr.opcode])
         if isinstance(instr.arg, Variable):
             if instr.arg.local:
                 if instr.arg.name not in locals_d:
@@ -253,11 +252,6 @@ def resolve_names(body: Block, filename: str = "main.py", name: str = "main") ->
     )
 
 if __name__ == "__main__":
-    # dbg_print = lambda x : ASTNode(op = c_ast.Call(), children = [
-    #     ASTNode(op = c_ast.LoadName("print", False, True)),
-    #     x
-    # ]).then(ASTNode(c_ast.DebugArbitaryBlock(Block.from_instr(instruction_info_d["POP_TOP"], 0))))
-
     def dbg_print(*values):
         return ASTNode(op = c_ast.Call(pop = True), children = [
             ASTNode(op = c_ast.LoadName("print", False, True)),
@@ -271,16 +265,13 @@ if __name__ == "__main__":
             ])
 
     print(f"{compile(g_body)=}")
-    # exit()
     
     f_body = ASTNode(op = c_ast.Return(), children = [
         ASTNode(op = c_ast.MakeFn(args = ["y"], name = "<anonymous>", closes_over = (Variable("x", True, False),)), children = [
             g_body
         ])
     ])
-
-    # print(compile(f_body))
-   
+ 
     define_f = ASTNode(op = c_ast.StoreName("f", False), children = [
         ASTNode(op = c_ast.MakeFn(args = ["x"], name = "f"), children = [f_body])
     ])
@@ -293,14 +284,11 @@ if __name__ == "__main__":
                 ASTNode(op = c_ast.LoadName("input", False, True))
             ])
         ])
-        # ASTNode(op = c_ast.Constant(5))
     ])
 
     define_f = compile(define_f)
 
     call_f = compile(dbg_print(call_f)).pop_extraneous()
-
-    # print(f"{define_f.max_height=} {call_f.max_height=}")
 
     compiled = define_f + Block.early_ret()
 

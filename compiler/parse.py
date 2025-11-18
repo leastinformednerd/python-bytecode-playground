@@ -86,7 +86,7 @@ def _gen_ast(simplified_tree):
     match simplified_tree:
         case (str() as func,):
             return _gen_ast((func, []))
-        case (":def", (name, [args, body])):
+        case ("def", (name, [args, body])):
             if isinstance(args, str):
                 args = [args, []]
             return c_ast.ASTNode(op = c_ast.StoreName(name, False), children = [
@@ -97,7 +97,7 @@ def _gen_ast(simplified_tree):
                     ]
                 )
             ])
-        case (":ifelse", (cond, true, false)):
+        case ("ifelse", (cond, true, false)):
             return c_ast.ASTNode(
                 op = c_ast.IfElse(),
                 children = [_gen_ast(cond), _gen_ast(true), _gen_ast(false)]
@@ -110,7 +110,7 @@ def _gen_ast(simplified_tree):
             # print(f"bin op {op=} {lhs=} {rhs=}")
 
             return c_ast.ASTNode(op = c_ast.BinaryOp(op = op_mapping[op]), children = [lhs, rhs])
-        case (lhs, [("lt" | "eq" | "rt") as op, rhs]):
+        case (lhs, [("lt" | "eq" | "gt") as op, rhs]):
             return c_ast.ASTNode(op = c_ast.CompOp(op = op_mapping[op]), children = [_gen_ast(lhs), _gen_ast(rhs)])
 
         case (str() as func, tuple() as arg):

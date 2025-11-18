@@ -299,8 +299,4 @@ instruction_info_d = {name: InstrInfo(name, index, _height if isinstance(_height
     + [(f"<{x}>", -999, -99) for x in range(130, 239)]
 )}
 
-# for (this_name, this_instr), actual_name in zip(instruction_info_d.items(), dis.opname):
-#     if opcode.opname[this_instr.opcode] != this_name:
-#         print(f"At opcode {this_instr.opcode}. {opcode.opname[this_instr.opcode]},{this_instr=}")
-
 instruction_info_l = list(instruction_info_d.values())
