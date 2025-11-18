@@ -2,6 +2,7 @@
 This crates contains the decompiler python bytecode playground / sandpit. It's based on symbolic evaluation of Python bytecode and some reasonably naieve matching on the shape of the control flow graph it forms
 
 Currently the decompiler technically "works", in that it can decompile simple function bodies, however it has a few things I'd like to clear up:
+(Note that this is currently blocked on [cpybc](https://github.com/leastinformednerd/cpybc), and after that I intend to do some other static analysis so not sure when this will progress again)
 
 - [ ] Support for function definitions
 
