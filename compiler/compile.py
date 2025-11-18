@@ -209,6 +209,7 @@ def resolve_names(body: Block, filename: str = "main.py", name: str = "main") ->
     locals_d = {name: index for index, name in enumerate(locals)}
     globals_d = {}
     for instr in body.instructions:
+        # print(blocks.instruction_info_l[instr.opcode])
         if isinstance(instr.arg, Variable):
             if instr.arg.local:
                 if instr.arg.name not in locals_d:

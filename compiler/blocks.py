@@ -1,7 +1,6 @@
 from dataclasses import dataclass, field
 from collections.abc import Callable
 from typing import Any, Self
-import opcode
 import dis
 
 @dataclass
@@ -14,7 +13,6 @@ class Variable:
 class Constant:
     value: Any
     
-# arg: int | Variable | Constant
 @dataclass
 class Instruction:
     opcode: int
@@ -22,8 +20,10 @@ class Instruction:
 
 @dataclass
 class Block:
-    """A class for blocks of instructions.
-    Differs slightly from the way it's defined in the pseudo-haskell due to personal preference"""
+    """
+    A class for blocks of instructions.
+    Differs slightly from the way it's defined in the pseudo-haskell due to personal preference
+    """
     instructions: list[Instruction]
     height: int
     depth: int
@@ -174,16 +174,16 @@ class InstrInfo:
 instruction_info_d = {name: InstrInfo(name, index, _height if isinstance(_height, int) and abs(_height) < 10 else _height, depth) for index, (name, _height, depth) in enumerate([
     ("CACHE", 0, 0),
     ("BINARY_SLICE", -2, -3),
-    ("BINARY_SUBSCR", -1, -2),
-    ("<3>",-999, -999),
+    ("BUILD_TEMPLATE", -1, -2),
+    ("BINARY_OP_INPLACE_ADD_UNICODE",-999, -999),
+    ("CALL_FUNCTION_EX", -2, -2), # I think this is correct, but the documentation seems ambiguous
     ("CHECK_EG_MATCH", 0, -2),
     ("CHECK_EXC_MATCH", 0, -1),
     ("CLEANUP_THROW", -2, -3), # This one is weirdly conditional but we have to assume the worst
     ("DELETE_SUBSCR", -2, -2),
-    ("END_ASYNC_FOR", -2, -2), # This might have a height of -1, I'm not clear how exceptions work
     ("END_FOR", -1, -1),
     ("END_SEND",-2, -1),
-    ("EXIT_INIT_CHECK - Undocumented", -999, -999),
+    ("EXIT_INIT_CHECK", -999, -999),
     ("FORMAT_SIMPLE", 0, -1),
     ("FORMAT_WITH_SPEC", -1, -2),
     ("GET_AITER", 0, -1),
@@ -217,6 +217,7 @@ instruction_info_d = {name: InstrInfo(name, index, _height if isinstance(_height
     ("UNARY_NOT", 0, -1),
     ("WITH_EXCEPT_START", -3, -4), # Not confident on this one
     ("BINARY_OP", -1, -2),
+    ("BUILD_INTERPOLATION", lambda f: 2 if format&1 else 1, lambda f: 3 if format&1 else 2),
     ("BUILD_LIST", lambda i: -1*i + 1, lambda i: -1*i),
     ("BUILD_MAP", lambda i: -2*i + 1, lambda i: -2*i),
     ("BUILD_SET", lambda i: -1*i + 1, lambda i: -1*i),
@@ -224,7 +225,6 @@ instruction_info_d = {name: InstrInfo(name, index, _height if isinstance(_height
     ("BUILD_STRING", lambda i: -1*i + 1, lambda i: -1*i),
     ("BUILD_TUPLE", lambda i: -1*i + 1, lambda i: -1*i),
     ("CALL", lambda i: -1*i - 1, lambda i: -1*i - 2),
-    ("CALL_FUNCTION_EX", -1, -2), # Not confident on this one
     ("CALL_INTRINSIC_1", 0, -1),
     ("CALL_INTRINSIC_2", -1, -2),
     ("CALL_KW", lambda i: -1*i - 2, lambda i: -1*i - 3),
@@ -240,6 +240,7 @@ instruction_info_d = {name: InstrInfo(name, index, _height if isinstance(_height
     ("DELETE_NAME", 0, 0),
     ("DICT_MERGE", -1, lambda i: -1*i),
     ("DICT_UPDATE", -1, lambda i: -1*i),
+    ("END_ASYNC_FOR", -2, -2),
     ("EXTENDED_ARG", 0, 0),
     ("FOR_ITER", 1, -1),
     ("GET_AWAITABLE", 0, -1),
@@ -257,8 +258,10 @@ instruction_info_d = {name: InstrInfo(name, index, _height if isinstance(_height
     ("LOAD_DEREF", 1, 1),
     ("LOAD_FAST", 1, 1),
     ("LOAD_FAST_AND_CLEAR", 1, 1),
+    ("LOAD_FAST_BORROW", 1, 1),
+    ("LOAD_FAST_BORROW_LOAD_FAST_BORROW", 2, 2),
     ("LOAD_FAST_CHECK", 1, 1),
-    ("LOAD_FAST_LOAD_FAST", 2, 1),
+    ("LOAD_FAST_LOAD_FAST", 2, 2),
     ("LOAD_FROM_DICT_OR_DEREF", 0, -1),
     ("LOAD_FROM_DICT_OR_GLOBALS", 0, -1),
     ("LOAD_GLOBAL", lambda i: 2 if i&1 == 1 else 1, 1),
@@ -283,22 +286,21 @@ instruction_info_d = {name: InstrInfo(name, index, _height if isinstance(_height
     ("STORE_DEREF", -1, -1),
     ("STORE_FAST", -1, -1),
     ("STORE_FAST_LOAD_FAST", 0, -1),
-    ("STORE_FAST_STORE_FAST", 0, -2),
+    ("STORE_FAST_STORE_FAST", -2, -2),
     ("STORE_GLOBAL", -1, -1),
     ("STORE_NAME", -1, -1),
     ("SWAP", 0, lambda i: max(-1, i)),
     ("UNPACK_EX", -999, -999), # > 2 byte instr so I'm going to pretend it doesn't exist
     ("UNPACK_SEQUENCE", lambda i: i-1, -1),
     ("YIELD_VALUE", 0, -1), # I'm actually unclear but I think this is correct
-    ] + [(f"<{x}>", -999, -999) for x in range(118, 149)]
-    + [("RESUME", 0, 0)] + [(f"<{x}>", -999, -99) for x in range(150, 239)]
-    # There's some more after this point but I don't know what they do (undocumented) or they have
-    # an opcode greater than one byte which I thought is unencodable so not sure why they're there.
-    # All the ones that are in the docs or I can infer can be implemented with others so I think that's ok for now
+    ] + [(f"<{x}>", -999, -999) for x in range(121, 128)]
+    + [("RESUME", 0, 0)]
+    # There are some more but they're all VM μ-ops (JIT specialization afaict)
+    + [(f"<{x}>", -999, -99) for x in range(130, 239)]
 )}
 
-# for this_name, actual_name in zip(instruction_info_d.keys(), dis.opname):
-#     if this_name != actual_name:
-#         print (this_name, actual_name)
+# for (this_name, this_instr), actual_name in zip(instruction_info_d.items(), dis.opname):
+#     if opcode.opname[this_instr.opcode] != this_name:
+#         print(f"At opcode {this_instr.opcode}. {opcode.opname[this_instr.opcode]},{this_instr=}")
 
 instruction_info_l = list(instruction_info_d.values())
